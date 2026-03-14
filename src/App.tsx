@@ -1,14 +1,15 @@
 import React, { useState, useCallback } from 'react';
 import {
-    db, seedData, fmtMoney, checkout, cargarStock, agregarProducto,
-    getReporteDiario, getReporteSemanal, getProducto, getEspecies, getCategorias,
+    db, seedData, fmtMoney, checkout, cargarStock, agregarProducto, editarProducto, abrirSaco,
+    getReporteDiario, getReporteSemanal, getReporteMensual, getProducto, getEspecies, getCategorias,
     agregarFactura, actualizarEstadoFactura, getFacturas, editarFactura, pagarFactura, cancelarPago,
-    MetodoPago, EstadoFactura, type Producto, type ItemCarrito, type Factura, type TipoFactura,
+    crearCliente, editarCliente, crearPedido, getPedidos, actualizarEstadoPedido, getClientes,
+    MetodoPago, EstadoFactura, EstadoPedido, type Producto, type ItemCarrito, type Factura, type TipoFactura, type Cliente, type Pedido
 } from './pos';
 
 // ── Tipos locales ─────────────────────────────────────
-type Tab = 'pos' | 'inventory' | 'report' | 'weekly' | 'facturas';
-type ToastType = 'success' | 'error';
+type Tab = 'pos' | 'inventory' | 'ordenes' | 'pedidos' | 'clientes' | 'report' | 'weekly' | 'informes' | 'facturas';
+type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: number; msg: string; type: ToastType; }
 
 // ── Inicializar datos ─────────────────────────────────
@@ -50,8 +51,18 @@ export default function App() {
                     </div>
                 </div>
                 <div className="nav-tabs">
-                    {([['pos', '🛒', 'Terminal de Venta'], ['inventory', '📦', 'Inventario'], ['report', '📊', 'Reporte del Día'], ['weekly', '📅', 'Reporte Semanal'], ['facturas', '🧾', 'Facturas']] as const).map(([id, icon, label]) => (
-                        <button key={id} className={`nav-tab${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>
+                    {([
+                        ['pos', '🛒', 'Venta'], 
+                        ['pedidos', '🛵', 'Pedidos'], 
+                        ['clientes', '👥', 'Clientes'], 
+                        ['inventory', '📦', 'Inventario'], 
+                        ['ordenes', '📝', 'Órdenes'], 
+                        ['report', '📊', 'Diario'], 
+                        ['weekly', '📅', 'Semanal'], 
+                        ['informes', '📈', 'Informes'], 
+                        ['facturas', '🧾', 'Facturas']
+                    ] as const).map(([id, icon, label]) => (
+                        <button key={id} className={`nav-tab${tab === id ? ' active' : ''}`} onClick={() => setTab(id as Tab)}>
                             <span className="tab-icon">{icon}</span>{label}
                         </button>
                     ))}
@@ -62,7 +73,7 @@ export default function App() {
             </div>
 
             {/* SCREENS */}
-            <div className="screen-container">
+            <main className="main-content">
                 {tab === 'pos' && (
                     <POSScreen
                         key={refresh}
@@ -76,8 +87,12 @@ export default function App() {
                 )}
                 {tab === 'report' && <ReportScreen key={refresh} />}
                 {tab === 'weekly' && <WeeklyReportScreen key={refresh} />}
+                {tab === 'informes' && <InformesScreen key={refresh} />}
                 {tab === 'facturas' && <FacturasScreen key={refresh} addToast={addToast} />}
-            </div>
+                {tab === 'pedidos' && <PedidosScreen key={refresh} addToast={addToast} />}
+                {tab === 'clientes' && <ClientesScreen key={refresh} />}
+                {tab === 'ordenes' && <PurchaseOrderScreen key={refresh} addToast={addToast} />}
+            </main>
 
             {/* TOASTS */}
             <div className="toast-container">
@@ -108,8 +123,11 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
     const [query, setQuery] = useState('');
     const [especieFilter, setEspecieFilter] = useState('Todos');
     const [catFilter, setCatFilter] = useState('Todos');
+    const [tipoGranelFilter, setTipoGranelFilter] = useState<'Todos' | 'Suelto' | 'Saco'>('Todos');
     const [sortBy, setSortBy] = useState<'nombre' | 'precio_asc' | 'precio_desc' | 'peso_asc' | 'peso_desc'>('nombre');
     const [metodo, setMetodo] = useState<MetodoPago>(MetodoPago.Efectivo);
+    const [granelModal, setGranelModal] = useState<Producto | null>(null);
+    const [pedidoModal, setPedidoModal] = useState(false);
 
     const especies = getEspecies();
     const categorias = getCategorias();
@@ -129,7 +147,10 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
             const matchQ = !query || p.nombre.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase());
             const matchEsp = especieFilter === 'Todos' || p.especie === especieFilter;
             const matchCat = catFilter === 'Todos' || p.categoria === catFilter;
-            return matchQ && matchEsp && matchCat;
+            const matchGranel = tipoGranelFilter === 'Todos' 
+                || (tipoGranelFilter === 'Suelto' && p.venta_a_granel)
+                || (tipoGranelFilter === 'Saco' && (!p.venta_a_granel && p.kilos_por_saco !== undefined));
+            return matchQ && matchEsp && matchCat && matchGranel;
         })
         .sort((a, b) => {
             switch (sortBy) {
@@ -142,11 +163,20 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
         });
 
     const addToCart = (prod: Producto) => {
-        if (prod.stock_actual === 0) return;
+        if (prod.stock_actual <= 0) {
+            addToast('⚠️ No hay más stock disponible', 'error');
+            return;
+        }
+        
+        if (prod.venta_a_granel) {
+            setGranelModal(prod);
+            return;
+        }
+
         setCarrito((prev) => {
             const existing = prev.find((i) => i.id === prod.id);
             if (existing) {
-                if (existing.qty >= prod.stock_actual) { addToast('⚠️ No hay más stock disponible', 'error'); return prev; }
+                if (existing.qty >= prod.stock_actual) { addToast('⚠️ Stock máximo alcanzado', 'error'); return prev; }
                 return prev.map((i) => i.id === prod.id ? { ...i, qty: i.qty + 1 } : i);
             }
             return [...prev, { id: prod.id, nombre: prod.nombre, precio: prod.precio_venta, qty: 1, emoji: prod.emoji }];
@@ -177,7 +207,23 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
     };
 
     const total = carrito.reduce((s, i) => s + i.qty * i.precio, 0);
-    const count = carrito.reduce((s, i) => s + i.qty, 0);
+    const count = carrito.length; // Contar lineas, no qty porque hay decimales
+
+    const handleGranelSubmit = (prod: Producto, kilos: number) => {
+        if (kilos <= 0) return;
+        if (kilos > prod.stock_actual) {
+            addToast(`⚠️ Solo quedan ${prod.stock_actual} kg en stock`, 'error');
+            return;
+        }
+        setCarrito((prev) => {
+            const existing = prev.find((i) => i.id === prod.id);
+            if (existing) {
+                return prev.map((i) => i.id === prod.id ? { ...i, qty: kilos } : i);
+            }
+            return [...prev, { id: prod.id, nombre: prod.nombre, precio: prod.precio_venta, qty: kilos, emoji: prod.emoji, isGranel: true }];
+        });
+        setGranelModal(null);
+    };
 
     return (
         <div className="pos-layout">
@@ -225,6 +271,22 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
                     </div>
                 </div>
 
+                {/* Filtro por tipo de venta (Suelto vs Saco) */}
+                <div className="filter-row">
+                    <span className="filter-label">Formato:</span>
+                    <div className="category-pills">
+                        {(['Todos', 'Suelto', 'Saco'] as const).map((tipo) => (
+                            <button
+                                key={tipo}
+                                className={`pill${tipoGranelFilter === tipo ? ' active' : ''}`}
+                                onClick={() => setTipoGranelFilter(tipo)}
+                            >
+                                {tipo === 'Todos' ? '🐾' : tipo === 'Suelto' ? '⚖️' : '🛍️'} {tipo}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 {/* Filtro por categoría */}
                 <div className="filter-row">
                     <span className="filter-label">Categoría:</span>
@@ -259,8 +321,11 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
                                     <span className={`product-stock-badge ${stockClass}`}>{stockLabel}</span>
                                     <div className="product-emoji">{p.emoji}</div>
                                     <div className="product-name">{p.nombre}</div>
-                                    <div className="product-sku">{p.sku}{p.peso_kg ? ` · ${p.peso_kg < 1 ? `${p.peso_kg * 1000}g` : `${p.peso_kg}kg`}` : ''}</div>
-                                    <div className="product-price">{fmtMoney(p.precio_venta)}</div>
+                                    <div className="product-sku">
+                                        {p.sku}{p.peso_kg && !p.venta_a_granel ? ` · ${p.peso_kg < 1 ? `${p.peso_kg * 1000}g` : `${p.peso_kg}kg`}` : ''}
+                                        {p.venta_a_granel ? ' · ⚖️ A granel' : ''}
+                                    </div>
+                                    <div className="product-price">{fmtMoney(p.precio_venta)} {p.venta_a_granel ? '/ kg' : ''}</div>
                                     <div className="product-especie-badge">{ESPECIE_ICONS[p.especie] ?? '🐾'} {p.especie}</div>
                                 </div>
                             );
@@ -292,9 +357,20 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
                                     <div className="cart-item-sub">{fmtMoney(item.precio)} c/u</div>
                                 </div>
                                 <div className="qty-controls">
-                                    <button className="qty-btn" onClick={() => changeQty(item.id, -1)}>−</button>
-                                    <span className="qty-num">{item.qty}</span>
-                                    <button className="qty-btn" onClick={() => changeQty(item.id, 1)}>+</button>
+                                    {item.isGranel ? (
+                                        <button className="qty-btn" style={{ width: 'auto', padding: '0 8px', fontSize: '0.85rem' }} onClick={() => {
+                                            const p = getProducto(item.id);
+                                            if (p) setGranelModal(p);
+                                        }}>
+                                            ✏️ {item.qty} kg
+                                        </button>
+                                    ) : (
+                                        <>
+                                            <button className="qty-btn" onClick={() => changeQty(item.id, -1)}>−</button>
+                                            <span className="qty-num">{item.qty}</span>
+                                            <button className="qty-btn" onClick={() => changeQty(item.id, 1)}>+</button>
+                                        </>
+                                    )}
                                 </div>
                                 <span className="cart-item-price">{fmtMoney(item.qty * item.precio)}</span>
                                 <button className="remove-btn" onClick={() => setCarrito((p) => p.filter((i) => i.id !== item.id))}>✕</button>
@@ -328,13 +404,135 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
                     </div>
                 </div>
 
-                <button
-                    className="checkout-btn"
-                    disabled={carrito.length === 0}
-                    onClick={handleCheckout}
-                >
-                    🐾 FINALIZAR VENTA
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <button
+                        className="checkout-btn"
+                        disabled={carrito.length === 0}
+                        onClick={handleCheckout}
+                    >
+                        🐾 FINALIZAR VENTA
+                    </button>
+                    <button
+                        className="btn-secondary"
+                        style={{ padding: '16px', fontSize: '1rem', fontWeight: 'bold' }}
+                        disabled={carrito.length === 0}
+                        onClick={() => setPedidoModal(true)}
+                    >
+                        🛵 CREAR PEDIDO
+                    </button>
+                </div>
+            </div>
+
+            {granelModal && (
+                <GranelModal
+                    producto={granelModal}
+                    initialQty={carrito.find(i => i.id === granelModal.id)?.qty}
+                    onClose={() => setGranelModal(null)}
+                    onSubmit={handleGranelSubmit}
+                />
+            )}
+
+            {pedidoModal && (
+                <PedidoModal
+                    carrito={carrito}
+                    total={total}
+                    onClose={() => setPedidoModal(false)}
+                    addToast={addToast}
+                    onSuccess={() => {
+                        setCarrito([]);
+                        setPedidoModal(false);
+                        flashSuccess();
+                    }}
+                />
+            )}
+        </div>
+    );
+}
+
+// ── Modal Venta a Granel ────────────────────────────
+function GranelModal({ producto, initialQty, onClose, onSubmit }: {
+    producto: Producto;
+    initialQty?: number;
+    onClose: () => void;
+    onSubmit: (p: Producto, kilos: number) => void;
+}) {
+    // Calculamos el valor inicial si ya estaba en el carrito
+    const defaultKilos = initialQty ? initialQty.toString() : '';
+    const defaultMonto = initialQty ? Math.round(initialQty * producto.precio_venta).toString() : '';
+
+    const [kilosStr, setKilosStr] = useState(defaultKilos);
+    const [montoStr, setMontoStr] = useState(defaultMonto);
+
+    const handleKilosChange = (val: string) => {
+        setKilosStr(val);
+        const k = parseFloat(val);
+        if (!isNaN(k)) {
+            setMontoStr(Math.round(k * producto.precio_venta).toString());
+        } else {
+            setMontoStr('');
+        }
+    };
+
+    const handleMontoChange = (val: string) => {
+        setMontoStr(val);
+        const m = parseFloat(val);
+        if (!isNaN(m)) {
+            const k = m / producto.precio_venta;
+            setKilosStr(k.toFixed(3)); // Mostrar hasta 3 decimales
+        } else {
+            setKilosStr('');
+        }
+    };
+
+    const submit = () => {
+        const k = parseFloat(kilosStr);
+        if (!isNaN(k) && k > 0) {
+            onSubmit(producto, k);
+        }
+    };
+
+    return (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+            <div className="modal" style={{ maxWidth: 400 }}>
+                <div className="modal-title">⚖️ Vender {producto.nombre}</div>
+                <div className="modal-body">
+                    <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginBottom: 16 }}>
+                        Precio por Kilogramo: <strong>{fmtMoney(producto.precio_venta)}</strong><br/>
+                        Stock disponible: <strong>{producto.stock_actual} kg</strong>
+                    </p>
+                    
+                    <div className="form-row" style={{ alignItems: 'flex-end' }}>
+                        <div className="form-group" style={{ flex: 1 }}>
+                            <div className="form-label">Monto ($)</div>
+                            <input
+                                className="form-input"
+                                type="number"
+                                placeholder="Ej: 2000"
+                                value={montoStr}
+                                onChange={(e) => handleMontoChange(e.target.value)}
+                                autoFocus
+                            />
+                        </div>
+                        <div style={{ padding: '0 16px', fontSize: '1.2rem', color: 'var(--muted)', marginBottom: 8 }}>
+                            =
+                        </div>
+                        <div className="form-group" style={{ flex: 1 }}>
+                            <div className="form-label">Peso (Kilos)</div>
+                            <input
+                                className="form-input"
+                                type="number"
+                                placeholder="Ej: 0.66"
+                                step="0.001"
+                                value={kilosStr}
+                                onChange={(e) => handleKilosChange(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+                    <button className="btn-primary" onClick={submit} disabled={!parseFloat(kilosStr)}>✅ Agregar al carrito</button>
+                </div>
             </div>
         </div>
     );
@@ -345,7 +543,7 @@ function InventoryScreen({ addToast, onRefresh }: {
     onRefresh: () => void;
 }) {
     const [stockModal, setStockModal] = useState<Producto | null>(null);
-    const [addModal, setAddModal] = useState(false);
+    const [addModal, setAddModal] = useState<boolean | Producto>(false);
     const [stockQty, setStockQty] = useState('');
     const [stockNote, setStockNote] = useState('');
     const [tick, setTick] = useState(0);
@@ -355,6 +553,7 @@ function InventoryScreen({ addToast, onRefresh }: {
     const [especieFilter, setEspecieFilter] = useState('Todos');
     const [catFilter, setCatFilter] = useState('Todos');
     const [stockFilter, setStockFilter] = useState<'todos' | 'ok' | 'bajo' | 'sin'>('todos');
+    const [tipoGranelFilter, setTipoGranelFilter] = useState<'Todos' | 'Suelto' | 'Saco'>('Todos');
     const [sortBy, setSortBy] = useState<'nombre' | 'precio_asc' | 'precio_desc' | 'stock_asc' | 'stock_desc'>('nombre');
 
     const ESPECIE_ICONS: Record<string, string> = { Todos: '🐾', Perro: '🐕', Gato: '🐈', Ave: '🐦', Pez: '🐟', Conejo: '🐇', Otros: '🐾' };
@@ -385,7 +584,10 @@ function InventoryScreen({ addToast, onRefresh }: {
                     stockFilter === 'sin' ? p.stock_actual === 0 :
                         stockFilter === 'bajo' ? (p.stock_actual > 0 && p.stock_actual <= p.stock_minimo) :
                             (p.stock_actual > p.stock_minimo);
-            return matchQ && matchEsp && matchCat && matchStock;
+            const matchGranel = tipoGranelFilter === 'Todos' 
+                || (tipoGranelFilter === 'Suelto' && p.venta_a_granel)
+                || (tipoGranelFilter === 'Saco' && (!p.venta_a_granel && p.kilos_por_saco !== undefined));
+            return matchQ && matchEsp && matchCat && matchStock && matchGranel;
         })
         .sort((a, b) => {
             switch (sortBy) {
@@ -406,6 +608,17 @@ function InventoryScreen({ addToast, onRefresh }: {
         setTick((t) => t + 1); onRefresh();
     };
 
+    const handleAbrirSaco = (p: Producto) => {
+        if (!confirm(`¿Estás seguro que deseas abrir 1 saco de ${p.nombre}?`)) return;
+        const res = abrirSaco(p.id);
+        if (!res.ok) {
+            addToast(`❌ Error: ${res.error}`, 'error');
+        } else {
+            addToast(`✅ Saco abierto correctamente. Se sumaron kilos al tambor.`, 'success');
+            setTick((t) => t + 1); onRefresh();
+        }
+    };
+
     return (
         <div className="inv-screen">
             <div className="screen-header" style={{ flexShrink: 0, marginBottom: 16 }}>
@@ -414,20 +627,23 @@ function InventoryScreen({ addToast, onRefresh }: {
             </div>
 
             {/* Stats — clickeables como filtro rápido de stock */}
-            <div className="inv-stats">
+            <div className="weekly-summary-cards" style={{ marginTop: 0, marginBottom: 16 }}>
                 {([
                     { label: 'Total Productos', value: total, cls: '', key: 'todos' },
-                    { label: 'Stock OK', value: ok, cls: 'ok', key: 'ok' },
-                    { label: 'Stock Bajo', value: stockBajo, cls: 'warn', key: 'bajo' },
-                    { label: 'Sin Stock', value: sinStock, cls: 'danger', key: 'sin' },
+                    { label: 'Stock OK', value: ok, cls: 'success-card', key: 'ok' },
+                    { label: 'Stock Bajo', value: stockBajo, cls: 'warning-card', key: 'bajo' }, /* need to add warning-card style to index.css later */
+                    { label: 'Sin Stock', value: sinStock, cls: 'danger-card', key: 'sin' },
                 ] as const).map((s) => (
                     <div
                         key={s.label}
-                        className={`inv-stat inv-stat-btn${stockFilter === s.key ? ' inv-stat-active' : ''}`}
+                        className={`summary-card inv-stat-btn ${s.cls} ${stockFilter === s.key ? 'inv-stat-active' : ''}`}
                         onClick={() => setStockFilter(stockFilter === s.key ? 'todos' : s.key)}
+                        style={{ padding: '20px 16px', cursor: 'pointer' }}
                     >
-                        <div className="inv-stat-label">{s.label}</div>
-                        <div className={`inv-stat-value ${s.cls}`}>{s.value}</div>
+                        <div className="sc-label">{s.label}</div>
+                        <div className="sc-value" style={{ 
+                            color: s.key === 'ok' ? 'var(--success)' : s.key === 'bajo' ? 'var(--warn)' : s.key === 'sin' ? 'var(--danger)' : '' 
+                        }}>{s.value}</div>
                     </div>
                 ))}
             </div>
@@ -449,6 +665,22 @@ function InventoryScreen({ addToast, onRefresh }: {
                     <select className="sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
                         {SORT_INV.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
+                </div>
+
+                {/* Filtro por tipo de venta (Suelto vs Saco) */}
+                <div className="filter-row">
+                    <span className="filter-label">Formato:</span>
+                    <div className="category-pills">
+                        {(['Todos', 'Suelto', 'Saco'] as const).map((tipo) => (
+                            <button
+                                key={tipo}
+                                className={`pill${tipoGranelFilter === tipo ? ' active' : ''}`}
+                                onClick={() => setTipoGranelFilter(tipo)}
+                            >
+                                {tipo === 'Todos' ? '🐾' : tipo === 'Suelto' ? '⚖️' : '🛍️'} {tipo}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
                 {/* Especie */}
@@ -509,10 +741,18 @@ function InventoryScreen({ addToast, onRefresh }: {
                                     <td style={{ color: 'var(--muted)' }}>{fmtMoney(p.precio_costo)}</td>
                                     <td><span className={`stock-cell ${sc}`}>{p.stock_actual}</span></td>
                                     <td style={{ color: 'var(--muted)' }}>{p.stock_minimo}</td>
-                                    <td>
-                                        <button className="add-stock-btn" onClick={() => { setStockModal(p); setStockQty(''); setStockNote(''); }}>
-                                            📥 Cargar Stock
+                                    <td style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                        <button className="btn-xs" style={{ whiteSpace: 'nowrap' }} onClick={() => { setStockModal(p); setStockQty(''); setStockNote(''); }}>
+                                            📥 Cargar
                                         </button>
+                                        <button className="btn-xs btn-secondary" style={{ whiteSpace: 'nowrap' }} onClick={() => setAddModal(p)}>
+                                            ✏️ Editar
+                                        </button>
+                                        {p.id_producto_suelto && p.kilos_por_saco && p.stock_actual > 0 && (
+                                            <button className="btn-xs btn-accent" style={{ whiteSpace: 'nowrap', backgroundColor: '#eab308', color: '#000' }} onClick={() => handleAbrirSaco(p)}>
+                                                📦 Abrir Saco
+                                            </button>
+                                        )}
                                     </td>
                                 </tr>
                             );
@@ -552,45 +792,76 @@ function InventoryScreen({ addToast, onRefresh }: {
                 </div>
             )}
 
-            {/* Modal: Nuevo Producto */}
-            {addModal && <AddProductModal onClose={() => setAddModal(false)} addToast={addToast} onSave={() => { setTick((t) => t + 1); onRefresh(); }} />}
+            {/* Modal: Producto */}
+            {addModal && <ProductModal productoToEdit={typeof addModal === 'object' ? addModal : undefined} onClose={() => setAddModal(false)} addToast={addToast} onSave={() => { setTick((t) => t + 1); onRefresh(); }} />}
         </div>
     );
 }
 
-// ── Modal Agregar Producto ────────────────────────────
-function AddProductModal({ onClose, addToast, onSave }: {
+// ── Modal Agregar/Editar Producto ────────────────────────────
+function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
+    productoToEdit?: Producto;
     onClose: () => void;
     addToast: (m: string, t: ToastType) => void;
     onSave: () => void;
 }) {
-    const [form, setForm] = useState({ nombre: '', sku: '', pventa: '', pcosto: '', stock: '', stockmin: '5', cat: '', especie: 'Perro', emoji: '', imagen: '' });
-    const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
+    const isEdit = !!productoToEdit;
+    const [form, setForm] = useState({ 
+        nombre: productoToEdit?.nombre || '', 
+        sku: productoToEdit?.sku || '', 
+        pventa: productoToEdit?.precio_venta?.toString() || '', 
+        pcosto: productoToEdit?.precio_costo?.toString() || '', 
+        stock: productoToEdit?.stock_actual?.toString() || '', 
+        stockmin: productoToEdit?.stock_minimo?.toString() || '5', 
+        cat: productoToEdit?.categoria || '', 
+        especie: productoToEdit?.especie || 'Perro', 
+        emoji: productoToEdit?.emoji || '', 
+        imagen: productoToEdit?.imagen || '', 
+        venta_a_granel: productoToEdit?.venta_a_granel || false,
+        id_producto_suelto: productoToEdit?.id_producto_suelto?.toString() || '',
+        kilos_por_saco: productoToEdit?.kilos_por_saco?.toString() || '',
+        catCustom: ''
+    });
+    const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }));
 
     const save = () => {
         if (!form.nombre.trim() || !form.pventa) { addToast('⚠️ Nombre y precio son obligatorios', 'error'); return; }
-        const newId = db.productos.length ? Math.max(...db.productos.map((p) => p.id)) + 1 : 1;
-        agregarProducto({
+        
+        const prodData = {
             nombre: form.nombre.trim(),
-            sku: form.sku.trim() || `SKU-${newId}`,
+            sku: form.sku.trim() || (isEdit ? productoToEdit!.sku : `SKU-${Date.now()}`),
             precio_venta: parseFloat(form.pventa),
             precio_costo: parseFloat(form.pcosto) || 0,
             stock_actual: parseInt(form.stock) || 0,
             stock_minimo: parseInt(form.stockmin) || 5,
-            categoria: form.cat.trim() || 'General',
+            categoria: (form.cat === '+ NUEVA' ? form.catCustom.trim() : form.cat.trim()) || 'General',
             especie: form.especie || 'Perro',
             emoji: form.emoji.trim() || '🛍️',
             imagen: form.imagen.trim() || undefined,
-        });
-        addToast(`✅ Producto "${form.nombre}" agregado`, 'success');
+            venta_a_granel: form.venta_a_granel,
+            id_producto_suelto: form.id_producto_suelto ? parseInt(form.id_producto_suelto) : undefined,
+            kilos_por_saco: form.kilos_por_saco ? parseFloat(form.kilos_por_saco) : undefined,
+        };
+
+        if (isEdit) {
+            editarProducto(productoToEdit!.id, prodData);
+            addToast(`✅ Producto "${form.nombre}" actualizado`, 'success');
+        } else {
+            agregarProducto(prodData);
+            addToast(`✅ Producto "${form.nombre}" agregado`, 'success');
+        }
+
         onSave();
         onClose();
     };
 
+    const productosGranel = db.productos.filter(p => p.venta_a_granel && p.id !== productoToEdit?.id);
+    const categoriasExistentes = getCategorias();
+
     return (
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="modal" style={{ width: 560 }}>
-                <div className="modal-title">➕ Nuevo Producto</div>
+            <div className="modal" style={{ width: 560, maxHeight: '90vh', overflowY: 'auto' }}>
+                <div className="modal-title">{isEdit ? '✏️ Editar Producto' : '➕ Nuevo Producto'}</div>
                 <div className="modal-body">
                     <div className="form-row">
                         <div className="form-group">
@@ -617,7 +888,14 @@ function AddProductModal({ onClose, addToast, onSave }: {
                         </div>
                         <div className="form-group">
                             <div className="form-label">Categoría</div>
-                            <input className="form-input" placeholder="Ej: Alimento, Snacks, Higiene" value={form.cat} onChange={set('cat')} />
+                            <select className="form-input" value={form.cat} onChange={set('cat')}>
+                                <option value="">-- Seleccionar --</option>
+                                {categoriasExistentes.map(c => <option key={c} value={c}>{c}</option>)}
+                                <option value="+ NUEVA">➕ Agregar Nueva...</option>
+                            </select>
+                            {form.cat === '+ NUEVA' && (
+                                <input className="form-input" style={{ marginTop: 8 }} placeholder="Nombre de la nueva categoría" value={form.catCustom} onChange={set('catCustom')} autoFocus />
+                            )}
                         </div>
                     </div>
                     <div className="form-group">
@@ -646,18 +924,41 @@ function AddProductModal({ onClose, addToast, onSave }: {
                     </div>
                     <div className="form-row">
                         <div className="form-group">
-                            <div className="form-label">Categoría</div>
-                            <input className="form-input" placeholder="Ej: Bebidas" value={form.cat} onChange={set('cat')} />
-                        </div>
-                        <div className="form-group">
                             <div className="form-label">Emoji (ícono)</div>
                             <input className="form-input" placeholder="🛍️" maxLength={2} value={form.emoji} onChange={set('emoji')} />
+                        </div>
+                    </div>
+                    <div className="form-row" style={{ marginTop: 12, padding: 12, background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                        <div style={{ width: '100%' }}>
+                            <label className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none', marginBottom: 0 }}>
+                                <input type="checkbox" checked={form.venta_a_granel} onChange={set('venta_a_granel')} style={{ width: 18, height: 18 }} />
+                                <span style={{ fontWeight: 500 }}>⚖️ Producto a Granel (Se vende suelto por Kg/Plata)</span>
+                            </label>
+                            
+                            {!form.venta_a_granel && productosGranel.length > 0 && (
+                                <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px dashed var(--border)' }}>
+                                    <div style={{ fontSize: '0.9rem', marginBottom: 8, color: 'var(--muted)' }}>📦 Opcional: ¿Este producto (Saco cerrado) abastece a un producto suelto?</div>
+                                    <div className="form-row">
+                                        <div className="form-group" style={{ flex: 2 }}>
+                                            <div className="form-label">Producto a granel que abastece</div>
+                                            <select className="form-input" value={form.id_producto_suelto} onChange={set('id_producto_suelto')}>
+                                                <option value="">-- Ninguno --</option>
+                                                {productosGranel.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="form-group" style={{ flex: 1 }}>
+                                            <div className="form-label">Kilos por Saco</div>
+                                            <input className="form-input" type="number" step="0.5" placeholder="Ej: 15" value={form.kilos_por_saco} onChange={set('kilos_por_saco')} disabled={!form.id_producto_suelto} />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
                 <div className="modal-actions">
                     <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-                    <button className="btn-primary" onClick={save}>✅ Agregar Producto</button>
+                    <button className="btn-primary" onClick={save}>✅ Guardar Producto</button>
                 </div>
             </div>
         </div>
@@ -897,7 +1198,7 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
     const [filtroEstado, setFiltroEstado] = useState<EstadoFactura | 'Todos'>('Todos');
     const [filtroTipo, setFiltroTipo] = useState<TipoFactura | 'Todos'>('Todos');
     const [query, setQuery] = useState('');
-    const [modal, setModal] = useState(false);
+    const [modal, setModal] = useState<Factura | 'NUEVA' | null>(null);
     const [detalle, setDetalle] = useState<Factura | null>(null);
 
     const refresh = () => setTick((t) => t + 1);
@@ -931,6 +1232,13 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
         refresh();
     };
 
+    const handleCancelarPago = (f: Factura) => {
+        if (!confirm(`¿Estás seguro que deseas deshacer el pago de la factura ${f.numero}?`)) return;
+        cancelarPago(f.id);
+        addToast(`🔄 Factura ${f.numero} revertida a Por Pagar`, 'success');
+        refresh();
+    };
+
     const handleAnular = (f: Factura) => {
         actualizarEstadoFactura(f.id, EstadoFactura.Anulada);
         addToast(`🚫 Factura ${f.numero} anulada`, 'success');
@@ -946,26 +1254,49 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
         return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
     };
 
+    const renderDiasRestantes = (iso: string, estado: EstadoFactura) => {
+        if (!iso || estado === EstadoFactura.Pagada || estado === EstadoFactura.Anulada) return null;
+        
+        const dateStr = iso.includes('T') ? iso : iso + 'T12:00:00';
+        const vencimiento = new Date(dateStr);
+        if (isNaN(vencimiento.getTime())) return null;
+
+        const hoy = new Date();
+        hoy.setHours(12, 0, 0, 0);
+        vencimiento.setHours(12, 0, 0, 0);
+
+        const diffDays = Math.round((vencimiento.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays < 0) {
+            return <div style={{ fontSize: '0.75rem', marginTop: 2, color: 'var(--danger)' }}>(Vencida hace {Math.abs(diffDays)} días)</div>;
+        } else if (diffDays === 0) {
+            return <div style={{ fontSize: '0.75rem', marginTop: 2, color: 'var(--warn)' }}>(Vence hoy)</div>;
+        } else {
+            const color = diffDays <= 3 ? 'var(--warn)' : 'var(--muted)';
+            return <div style={{ fontSize: '0.75rem', marginTop: 2, color }}>({diffDays} días restantes)</div>;
+        }
+    };
+
     return (
         <div className="fact-screen">
             <div className="screen-header" style={{ flexShrink: 0, marginBottom: 16 }}>
                 <div className="screen-title">🧾 Facturas</div>
-                <button className="btn-primary" onClick={() => setModal(true)}>➕ Nueva Factura</button>
+                <button className="btn-primary" onClick={() => setModal('NUEVA')}>➕ Nueva Factura</button>
             </div>
 
             {/* Stats */}
-            <div className="fact-stats">
+            <div className="weekly-summary-cards" style={{ marginTop: 0, marginBottom: 16 }}>
                 {[
-                    { label: 'Total', value: totalFacturas, sub: 'registradas', cls: '' },
-                    { label: 'Por Pagar', value: porPagar.length, sub: fmtMoney(porPagar.reduce((s, f) => s + f.monto_total, 0)), cls: 'warn' },
-                    { label: 'Pagadas', value: pagadas.length, sub: fmtMoney(pagadas.reduce((s, f) => s + f.monto_total, 0)), cls: 'ok' },
-                    { label: 'Vencidas', value: vencidas.length, sub: fmtMoney(vencidas.reduce((s, f) => s + f.monto_total, 0)), cls: 'danger' },
-                    { label: 'Pendiente Total', value: fmtMoney(montoPendiente), sub: 'por cobrar/pagar', cls: 'accent' },
+                    { label: 'Total Registradas', value: totalFacturas, sub: 'facturas en el sistema', cls: '' },
+                    { label: 'Por Pagar', value: porPagar.length, sub: fmtMoney(porPagar.reduce((s, f) => s + f.monto_total, 0)), cls: 'warning-card', color: 'var(--warn)' },
+                    { label: 'Pagadas', value: pagadas.length, sub: fmtMoney(pagadas.reduce((s, f) => s + f.monto_total, 0)), cls: 'success-card', color: 'var(--success)' },
+                    { label: 'Vencidas', value: vencidas.length, sub: fmtMoney(vencidas.reduce((s, f) => s + f.monto_total, 0)), cls: 'danger-card', color: 'var(--danger)' },
+                    { label: 'Pendiente Total', value: fmtMoney(montoPendiente), sub: 'por cobrar/pagar', cls: 'accent-card', color: 'var(--accent2)' },
                 ].map((s) => (
-                    <div key={s.label} className="fact-stat">
-                        <div className="fact-stat-label">{s.label}</div>
-                        <div className={`fact-stat-value ${s.cls}`}>{s.value}</div>
-                        <div className="fact-stat-sub">{s.sub}</div>
+                    <div key={s.label} className={`summary-card ${s.cls}`} style={{ padding: '20px 16px' }}>
+                        <div className="sc-label">{s.label}</div>
+                        <div className="sc-value" style={{ color: s.color, fontSize: typeof s.value === 'string' && s.value.includes('$') ? '2rem' : '3rem' }}>{s.value}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '8px' }}>{s.sub}</div>
                     </div>
                 ))}
             </div>
@@ -1023,7 +1354,10 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                                     <td style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>{f.descripcion}</td>
                                     <td><strong>{fmtMoney(f.monto_total)}</strong></td>
                                     <td style={{ fontSize: '0.85rem' }}>{fmtDate(f.fecha_emision)}</td>
-                                    <td style={{ fontSize: '0.85rem' }}>{fmtDate(f.fecha_vencimiento)}</td>
+                                    <td>
+                                        <div style={{ fontSize: '0.85rem' }}>{fmtDate(f.fecha_vencimiento)}</div>
+                                        {renderDiasRestantes(f.fecha_vencimiento, f.estado)}
+                                    </td>
                                     <td>
                                         <span className={`estado-badge ${ESTADO_CONFIG[f.estado].color}`}>
                                             {ESTADO_CONFIG[f.estado].icon} {f.estado}
@@ -1034,9 +1368,13 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                                             {(f.estado === EstadoFactura.PorPagar || f.estado === EstadoFactura.Vencida) && (
                                                 <button className="btn-xs btn-ok" onClick={() => handleMarcarPagada(f)}>✅ Pagada</button>
                                             )}
+                                            {f.estado === EstadoFactura.Pagada && (
+                                                <button className="btn-xs btn-warn" onClick={() => handleCancelarPago(f)}>🔄 Deshacer Pago</button>
+                                            )}
                                             {f.estado !== EstadoFactura.Anulada && f.estado !== EstadoFactura.Pagada && (
                                                 <button className="btn-xs btn-danger" onClick={() => handleAnular(f)}>🚫 Anular</button>
                                             )}
+                                            <button className="btn-xs" onClick={() => setModal(f)}>✏️ Editar</button>
                                             <button className="btn-xs" onClick={() => setDetalle(f)}>👁 Ver</button>
                                         </div>
                                     </td>
@@ -1047,8 +1385,8 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                 )}
             </div>
 
-            {/* Modal Nueva Factura */}
-            {modal && <NuevaFacturaModal onClose={() => setModal(false)} addToast={addToast} onSave={refresh} />}
+            {/* Modal Factura (Nueva / Editar) */}
+            {modal && <FacturaModal editItem={modal === 'NUEVA' ? undefined : modal} onClose={() => setModal(null)} addToast={addToast} onSave={refresh} />}
 
             {/* Modal Detalle */}
             {detalle && (
@@ -1089,19 +1427,25 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
     );
 }
 
-// ── Modal Nueva Factura ───────────────────────────────
-function NuevaFacturaModal({ onClose, addToast, onSave }: {
+// ── Modal Factura (Nueva / Editar) ───────────────────────
+function FacturaModal({ editItem, onClose, addToast, onSave }: {
+    editItem?: Factura;
     onClose: () => void;
     addToast: (m: string, t: ToastType) => void;
     onSave: () => void;
 }) {
     const today = new Date().toISOString().split('T')[0];
     const [form, setForm] = useState({
-        numero: '', tipo: 'Compra' as TipoFactura,
-        proveedor_cliente: '', descripcion: '',
-        monto_total: '', fecha_emision: today, fecha_vencimiento: '', notas: '',
+        numero: editItem?.numero || '', 
+        tipo: editItem?.tipo || 'Compra' as TipoFactura,
+        proveedor_cliente: editItem?.proveedor_cliente || '', 
+        descripcion: editItem?.descripcion || '',
+        monto_total: editItem ? editItem.monto_total.toString() : '', 
+        fecha_emision: editItem?.fecha_emision || today, 
+        fecha_vencimiento: editItem?.fecha_vencimiento || '', 
+        notas: editItem?.notas || '',
     });
-    const [imagenPreview, setImagenPreview] = useState<string | null>(null);
+    const [imagenPreview, setImagenPreview] = useState<string | null>(editItem?.imagen_url || null);
     const fileInputRef = React.useRef<HTMLInputElement>(null);
 
     const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
@@ -1109,7 +1453,7 @@ function NuevaFacturaModal({ onClose, addToast, onSave }: {
 
     // Auto-número
     const nextNum = `FAC-${String(getFacturas().length + 1).padStart(3, '0')}`;
-    const [numAuto] = useState(nextNum);
+    const [numAuto] = useState(editItem ? editItem.numero : nextNum);
 
     const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -1124,7 +1468,8 @@ function NuevaFacturaModal({ onClose, addToast, onSave }: {
         if (!form.proveedor_cliente.trim()) { addToast('⚠️ Ingresar proveedor/cliente', 'error'); return; }
         if (!form.monto_total || parseFloat(form.monto_total) <= 0) { addToast('⚠️ Monto inválido', 'error'); return; }
         if (!form.fecha_vencimiento) { addToast('⚠️ Ingresar fecha de vencimiento', 'error'); return; }
-        agregarFactura({
+        
+        const data = {
             numero: form.numero.trim() || numAuto,
             tipo: form.tipo,
             proveedor_cliente: form.proveedor_cliente.trim(),
@@ -1132,11 +1477,20 @@ function NuevaFacturaModal({ onClose, addToast, onSave }: {
             monto_total: parseFloat(form.monto_total),
             fecha_emision: form.fecha_emision,
             fecha_vencimiento: form.fecha_vencimiento,
-            estado: EstadoFactura.PorPagar,
             notas: form.notas.trim() || undefined,
             imagen_url: imagenPreview ?? undefined,
-        });
-        addToast(`✅ Factura ${form.numero || numAuto} registrada`, 'success');
+        };
+
+        if (editItem) {
+            editarFactura(editItem.id, data);
+            addToast(`✅ Factura ${data.numero} actualizada`, 'success');
+        } else {
+            agregarFactura({
+                ...data,
+                estado: EstadoFactura.PorPagar,
+            });
+            addToast(`✅ Factura ${data.numero} registrada`, 'success');
+        }
         onSave();
         onClose();
     };
@@ -1144,7 +1498,7 @@ function NuevaFacturaModal({ onClose, addToast, onSave }: {
     return (
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
             <div className="modal" style={{ width: 580 }}>
-                <div className="modal-title">🧾 Nueva Factura</div>
+                <div className="modal-title">🧾 {editItem ? 'Editar Factura' : 'Nueva Factura'}</div>
                 <div className="modal-body">
                     <div className="form-row">
                         <div className="form-group">
@@ -1223,6 +1577,657 @@ function NuevaFacturaModal({ onClose, addToast, onSave }: {
                     <button className="btn-secondary" onClick={onClose}>Cancelar</button>
                     <button className="btn-primary" onClick={save}>✅ Guardar Factura</button>
                 </div>
+            </div>
+        </div>
+    );
+}
+
+// ═══════════════════════════════════════════════════════
+// PURCHASE ORDER SCREEN (Órdenes de Compra)
+// ═══════════════════════════════════════════════════════
+
+interface POItem {
+    id: number;
+    nombre: string;
+    emoji: string;
+    qty: number;
+    costo: number;
+}
+
+function PurchaseOrderScreen({ addToast }: {
+    addToast: (m: string, t: ToastType) => void;
+}) {
+    // Inicializar con productos bajo stock
+    const initItems = useCallback(() => {
+        return db.productos
+            .filter((p) => p.stock_actual <= p.stock_minimo)
+            .map((p) => {
+                const deficit = p.stock_minimo - p.stock_actual;
+                // Sugerir pedir al menos 5 o lo que falte para llegar al mínimo
+                const suggestedQty = deficit > 0 ? deficit + 5 : 5;
+                return {
+                    id: p.id,
+                    nombre: p.nombre,
+                    emoji: p.emoji,
+                    qty: suggestedQty,
+                    costo: p.precio_costo
+                };
+            });
+    }, []);
+
+    const [items, setItems] = useState<POItem[]>(initItems);
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const searchResults = searchTerm.length > 0
+        ? db.productos.filter(p => 
+            (p.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || p.sku.toLowerCase().includes(searchTerm.toLowerCase()))
+            && !items.find(i => i.id === p.id)
+          ).slice(0, 5)
+        : [];
+
+    const handleAddItem = (p: Producto) => {
+        setItems([...items, { id: p.id, nombre: p.nombre, emoji: p.emoji, qty: p.stock_minimo || 5, costo: p.precio_costo }]);
+        setSearchTerm('');
+        addToast(`✅ ${p.nombre} agregado a la orden`, 'success');
+    };
+
+    const handleQtyChange = (id: number, delta: number) => {
+        setItems(prev => prev.map(i => {
+            if (i.id === id) {
+                const newQty = Math.max(1, i.qty + delta);
+                return { ...i, qty: newQty };
+            }
+            return i;
+        }));
+    };
+
+    const handleRemove = (id: number) => {
+        setItems(prev => prev.filter(i => i.id !== id));
+    };
+
+    const handleCopyWhatsApp = () => {
+        if (items.length === 0) {
+            addToast('⚠️ La orden está vacía', 'error');
+            return;
+        }
+
+        const dateStr = new Date().toLocaleDateString('es-AR');
+        let text = `📝 *ORDEN DE COMPRA*\nFecha: ${dateStr}\n\n*Productos a pedir:*\n`;
+        
+        items.forEach(i => {
+            text += `- ${i.qty}x ${i.emoji} ${i.nombre}\n`;
+        });
+
+        const totalCosto = items.reduce((sum, i) => sum + (i.qty * i.costo), 0);
+        text += `\n*Costo Estimado:* ${fmtMoney(totalCosto)}\n`;
+
+        navigator.clipboard.writeText(text).then(() => {
+            addToast('✅ Copiado al portapapeles listo para WhatsApp', 'success');
+        }).catch(() => {
+            addToast('❌ Error al copiar, intenta manualmente', 'error');
+        });
+    };
+
+    const totalLines = items.length;
+    const totalEstCosto = items.reduce((sum, i) => sum + (i.qty * i.costo), 0);
+
+    return (
+        <div className="report-screen">
+            <div className="screen-header" style={{ flexShrink: 0, marginBottom: 16 }}>
+                <div className="screen-title">📝 Generar Orden de Compra</div>
+                <button className="btn-secondary" onClick={() => { setItems(initItems()); addToast('🔄 Lista reiniciada a productos con bajo stock', 'info'); }}>
+                    🔄 Reiniciar con Bajo Stock
+                </button>
+            </div>
+
+            <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginBottom: '20px' }}>
+                Revisá los productos con bajo stock u agregá nuevos que necesites reponer. Ajusta cantidades y copía la lista para enviar por WhatsApp a tus proveedores.
+            </p>
+
+            <div className="po-layout" style={{ display: 'flex', gap: '20px', flexDirection: 'row', alignItems: 'flex-start' }}>
+                {/* ── IZQUIERDA: Buscador y Sugerencias ── */}
+                <div className="po-search-box" style={{ background: 'var(--surface)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border)', flex: '1', minWidth: '300px' }}>
+                    <div style={{ fontWeight: 600, marginBottom: 12 }}>🔍 Agregar producto manual:</div>
+                    <div className="search-bar search-compact" style={{ width: '100%', marginBottom: 12 }}>
+                        <span>🔍</span>
+                        <input
+                            type="text"
+                            placeholder="Nombre SKU del producto..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                        {searchTerm && <button className="search-clear" onClick={() => setSearchTerm('')}>✕</button>}
+                    </div>
+                    {searchTerm && searchResults.length === 0 && (
+                        <div style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Sin resultados o ya agregado.</div>
+                    )}
+                    {searchResults.length > 0 && (
+                        <div className="po-search-results" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {searchResults.map(p => (
+                                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: 'var(--bg)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                    <div>
+                                        <span>{p.emoji} </span>
+                                        <strong>{p.nombre}</strong>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Stock actual: {p.stock_actual} • Costo: {fmtMoney(p.precio_costo)}</div>
+                                    </div>
+                                    <button className="btn-accent-sm" onClick={() => handleAddItem(p)}>+ Añadir</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* ── DERECHA: Lista de Pedido ── */}
+                <div className="po-list-box" style={{ background: 'var(--surface)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border)', flex: '2', minWidth: '400px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                        <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>Lista de Pedido ({totalLines} items)</div>
+                        <div style={{ fontWeight: 600, color: 'var(--accent)', fontSize: '1.1rem' }}>Total Est: {fmtMoney(totalEstCosto)}</div>
+                    </div>
+
+                    {items.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--muted)', border: '1px dashed var(--border)', borderRadius: '8px' }}>
+                            <div style={{ fontSize: '2rem', marginBottom: '10px' }}>🛒</div>
+                            No hay productos en la orden de compra.
+                        </div>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '50vh', overflowY: 'auto', paddingRight: '8px' }}>
+                            {items.map(item => (
+                                <div key={item.id} style={{ display: 'flex', alignItems: 'center', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', gap: '12px' }}>
+                                    <span style={{ fontSize: '1.5rem' }}>{item.emoji}</span>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontWeight: 500, lineHeight: 1.2 }}>{item.nombre}</div>
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--muted)', marginTop: '2px' }}>Costo: {fmtMoney(item.costo)} c/u</div>
+                                    </div>
+                                    
+                                    <div className="qty-controls" style={{ background: 'var(--surface)', margin: 0, border: '1px solid var(--border)' }}>
+                                        <button className="qty-btn" onClick={() => handleQtyChange(item.id, -1)}>−</button>
+                                        <span className="qty-num" style={{ minWidth: 28 }}>{item.qty}</span>
+                                        <button className="qty-btn" onClick={() => handleQtyChange(item.id, 1)}>+</button>
+                                    </div>
+                                    
+                                    <div style={{ fontWeight: 600, width: '90px', textAlign: 'right', color: 'var(--accent2)' }}>
+                                        {fmtMoney(item.qty * item.costo)}
+                                    </div>
+
+                                    <button className="remove-btn" onClick={() => handleRemove(item.id)} style={{ width: '32px', height: '32px' }}>✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Acciones */}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                        <button 
+                            className="btn-primary" 
+                            style={{ padding: '12px 24px', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: 8, width: '100%', justifyContent: 'center' }}
+                            onClick={handleCopyWhatsApp}
+                            disabled={items.length === 0}
+                        >
+                            💬 Copiar Lista para WhatsApp
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ═══════════════════════════════════════════════════════
+// INFORMES SCREEN — Balance Mensual y KPIs
+// ═══════════════════════════════════════════════════════
+function InformesScreen() {
+    const today = new Date();
+    // input type="month" usa el formato YYYY-MM
+    const [mesSeleccionado, setMesSeleccionado] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`);
+
+    const [yearStr, monthStr] = mesSeleccionado.split('-');
+    const year = parseInt(yearStr);
+    const month = parseInt(monthStr);
+
+    const report = getReporteMensual(year, month);
+    const nombreMes = new Date(year, month - 1, 1).toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
+
+    return (
+        <div className="weekly-screen">
+            <div className="screen-header">
+                <div>
+                    <div className="screen-title">📈 Informes & Balance</div>
+                    <div style={{ color: 'var(--muted)', textTransform: 'capitalize' }}>
+                        KPIs y resúmenes del mes de {nombreMes}
+                    </div>
+                </div>
+                <div className="date-filter-group">
+                    <input
+                        type="month"
+                        className="date-input"
+                        value={mesSeleccionado}
+                        onChange={(e) => setMesSeleccionado(e.target.value)}
+                        style={{ fontSize: '1.2rem', padding: '8px 12px' }}
+                    />
+                </div>
+            </div>
+
+            <div className="weekly-summary-cards">
+                <div className="summary-card success-card">
+                    <div className="sc-label">Total Ingresos (Ventas)</div>
+                    <div className="sc-value" style={{ color: 'var(--success)' }}>{fmtMoney(report.totalVentas)}</div>
+                </div>
+                <div className="summary-card danger-card">
+                    <div className="sc-label">Total Costos</div>
+                    <div className="sc-value" style={{ color: 'var(--danger)' }}>{fmtMoney(report.totalCosto)}</div>
+                </div>
+                <div className="summary-card accent-card">
+                    <div className="sc-label">Utilidad Bruta (Ganancia)</div>
+                    <div className="sc-value" style={{ color: 'var(--accent)' }}>{fmtMoney(report.totalUtilidad)}</div>
+                </div>
+                <div className={`summary-card ${report.margenPromedio > 20 ? 'success-card' : ''}`}>
+                    <div className="sc-label">Margen de Ganancia Promedio</div>
+                    <div className="sc-value" style={{ color: report.margenPromedio > 20 ? 'var(--success)' : 'var(--warn)' }}>
+                        {report.margenPromedio > 0 ? `${report.margenPromedio.toFixed(1)}%` : '0%'}
+                    </div>
+                </div>
+                <div className="summary-card">
+                    <div className="sc-label">Ticket Promedio por Venta</div>
+                    <div className="sc-value">{fmtMoney(report.ticketPromedio)}</div>
+                </div>
+                <div className="summary-card">
+                    <div className="sc-label">Cantidad de Operaciones</div>
+                    <div className="sc-value">{report.cantidadVentas}</div>
+                </div>
+            </div>
+
+            {report.cantidadVentas === 0 ? (
+                <div style={{ textAlign: 'center', padding: '64px', color: 'var(--muted)', background: 'var(--surface)', borderRadius: 12, marginTop: 16 }}>
+                    <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📭</div>
+                    No hay registros de ventas para el mes seleccionado.
+                </div>
+            ) : (
+                <div style={{ marginTop: 24, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                    {/* Insights o KPIs adicionales */}
+                    {report.topProducto && (
+                        <div className="insight-card">
+                            <div style={{ fontSize: '0.9rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 16 }}>🏅 Producto Estrella del Mes</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+                                <div style={{ fontSize: '3.5rem' }}>{report.topProducto.emoji}</div>
+                                <div>
+                                    <h3 style={{ margin: '0 0 8px', fontSize: '1.4rem' }}>{report.topProducto.nombre}</h3>
+                                    <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '1.1rem', marginBottom: 4 }}>{fmtMoney(report.topProducto.totalBruto)} recaudados</div>
+                                    <div style={{ fontSize: '0.95rem', color: 'var(--muted)' }}>{report.topProducto.cantidad} unidades vendidas según detalle</div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div className="insight-card">
+                        <div style={{ fontSize: '0.9rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 16 }}>💡 Análisis de Rentabilidad</div>
+                        <ul style={{ margin: 0, paddingLeft: 24, color: 'var(--text)', lineHeight: 1.8, fontSize: '1.05rem' }}>
+                            <li>Tu ganancia bruta representa el <strong style={{color: 'var(--accent)'}}>{report.margenPromedio.toFixed(1)}%</strong> de tus ingresos.</li>
+                            <li>En promedio, cada cliente gasta <strong style={{color: 'var(--accent2)'}}>{fmtMoney(report.ticketPromedio)}</strong>.</li>
+                            <li>Registraste <strong>{report.cantidadVentas}</strong> ventas separadas este mes.</li>
+                        </ul>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── Modal Pedido (Delivery) ──────────────────────────────
+function PedidoModal({ carrito, total, onClose, addToast, onSuccess }: {
+    carrito: ItemCarrito[];
+    total: number;
+    onClose: () => void;
+    addToast: (m: string, t: ToastType) => void;
+    onSuccess: () => void;
+}) {
+    const [telefono, setTelefono] = useState('');
+    const [nombre, setNombre] = useState('');
+    const [direccion, setDireccion] = useState('');
+    const [notaDelivery, setNotaDelivery] = useState('');
+    const [metodoPago, setMetodoPago] = useState<MetodoPago>(MetodoPago.Efectivo);
+
+    const [clienteEncontrado, setClienteEncontrado] = useState<Cliente | null>(null);
+
+    // Auto-fill si existe
+    const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value;
+        setTelefono(val);
+        const existente = db.clientes.find(c => c.telefono === val);
+        if (existente) {
+            setClienteEncontrado(existente);
+            setNombre(existente.nombre);
+            setDireccion(existente.direccion);
+        } else {
+            setClienteEncontrado(null);
+            // No blanqueamos nombre y dirección para que el usuario pueda seguir tipeando
+        }
+    };
+
+    const handleCrearPedido = () => {
+        if (!telefono.trim() || !nombre.trim() || !direccion.trim()) {
+            addToast('⚠️ Teléfono, nombre y dirección son obligatorios', 'error');
+            return;
+        }
+
+        let clienteId = clienteEncontrado?.id;
+        if (!clienteId) {
+            // crear nuevo cliente
+            const nuevoObj = crearCliente({
+                telefono: telefono.trim(),
+                nombre: nombre.trim(),
+                direccion: direccion.trim(),
+                notas: ''
+            });
+            clienteId = nuevoObj.id;
+        } else {
+            // actualizar dirección por si cambió
+            editarCliente(clienteId, { nombre: nombre.trim(), direccion: direccion.trim() });
+        }
+
+        crearPedido({
+            id_cliente: clienteId,
+            items: carrito,
+            total,
+            estado: EstadoPedido.Pendiente,
+            metodo_pago: metodoPago,
+            nota_delivery: notaDelivery
+        });
+
+        addToast('🛵 ¡Pedido creado exitosamente!', 'success');
+        onSuccess();
+    };
+
+    return (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+            <div className="modal" style={{ maxWidth: '500px' }}>
+                <div className="modal-title">🛵 Crear Pedido a Domicilio</div>
+                <div className="modal-body">
+                    <div className="form-group">
+                        <div className="form-label">Teléfono (WhatsApp)</div>
+                        <input className="form-input" placeholder="Ej: +56 9 1234 5678" value={telefono} onChange={handlePhoneChange} autoFocus />
+                        {clienteEncontrado && <div style={{ fontSize: '0.8rem', color: 'var(--success)', marginTop: 4 }}>✓ Cliente existente encontrado</div>}
+                    </div>
+                    <div className="form-group">
+                        <div className="form-label">Nombre del Cliente</div>
+                        <input className="form-input" placeholder="Ej: Juan Pérez" value={nombre} onChange={e => setNombre(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                        <div className="form-label">Dirección de Entrega</div>
+                        <input className="form-input" placeholder="Ej: Pasaje Los Alerces 123, Villa Sur" value={direccion} onChange={e => setDireccion(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                        <div className="form-label">Notas para el repartidor</div>
+                        <textarea className="form-input" placeholder="Ej: Timbre no funciona, tocar la puerta" rows={2} value={notaDelivery} onChange={e => setNotaDelivery(e.target.value)} />
+                    </div>
+                    
+                    <div className="form-group" style={{ marginTop: '16px' }}>
+                        <div className="form-label">Forma de Pago (Total: {fmtMoney(total)})</div>
+                        <div className="payment-methods" style={{ display: 'flex', gap: '8px' }}>
+                            {([MetodoPago.Efectivo, MetodoPago.Transferencia, MetodoPago.Tarjeta] as const).map(m => {
+                                const icons = { Efectivo: '💵', Transferencia: '🏦', Tarjeta: '💳' };
+                                return (
+                                    <button
+                                        key={m}
+                                        className={`pay-btn${metodoPago === m ? ' selected' : ''}`}
+                                        style={{ flex: 1, padding: '8px 12px', fontSize: '0.9rem' }}
+                                        onClick={() => setMetodoPago(m)}
+                                    >
+                                        <span className="pay-icon" style={{ fontSize: '1.2rem' }}>{icons[m]}</span>
+                                        <div>{m}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+                <div className="modal-actions" style={{ marginTop: '24px' }}>
+                    <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+                    <button className="btn-primary" onClick={handleCrearPedido}>🛵 Confirmar Pedido</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ── Pedidos Screen ──────────────────────────────────────────
+function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => void }) {
+    const [pedidos, setPedidos] = useState<Pedido[]>([]);
+    const [refresh, setRefresh] = useState(0);
+
+    // Fetch data
+    React.useEffect(() => {
+        setPedidos(getPedidos());
+    }, [refresh]);
+
+    const handleActualizarEstado = (id: number, nuevoEstado: EstadoPedido) => {
+        if (actualizarEstadoPedido(id, nuevoEstado)) {
+            addToast(`Pedido #${id} actualizado a ${nuevoEstado}`, 'success');
+            setRefresh(r => r + 1);
+        } else {
+            addToast(`Error al actualizar pedido #${id}`, 'error');
+        }
+    };
+
+    const ESTADO_CONFIG = {
+        [EstadoPedido.Pendiente]: { color: 'var(--warning)', icon: '⏳' },
+        [EstadoPedido.EnCamino]: { color: 'var(--accent)', icon: '🛵' },
+        [EstadoPedido.Entregado]: { color: 'var(--success)', icon: '✅' },
+        [EstadoPedido.Cancelado]: { color: 'var(--danger)', icon: '❌' },
+    };
+
+    // Calculate sumary
+    const totalVendido = pedidos.filter(p => p.estado === EstadoPedido.Entregado).reduce((sum, p) => sum + p.total, 0);
+    const pendingsCount = pedidos.filter(p => p.estado === EstadoPedido.Pendiente).length;
+
+    return (
+        <div style={{ padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                <h1 style={{ margin: 0, fontSize: '1.8rem', color: 'var(--text)' }}>🛵 Gestión de Pedidos</h1>
+            </div>
+
+            <div className="weekly-summary-cards" style={{ marginBottom: 24, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+                <div className="summary-card">
+                    <div className="sc-icon">📊</div>
+                    <div className="sc-label">Total Entregados</div>
+                    <div className="sc-value">{fmtMoney(totalVendido)}</div>
+                </div>
+                <div className="summary-card warning-card">
+                    <div className="sc-icon">⏳</div>
+                    <div className="sc-label">Pendientes</div>
+                    <div className="sc-value" style={{ color: 'var(--warning)' }}>{pendingsCount}</div>
+                </div>
+            </div>
+
+            <div className="table-container">
+                <table className="inventory-table">
+                    <thead>
+                        <tr>
+                            <th>Nº</th>
+                            <th>Fecha</th>
+                            <th>Cliente / Teléfono</th>
+                            <th>Dirección</th>
+                            <th>Estado</th>
+                            <th>Total</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {pedidos.map((p) => {
+                            const config = ESTADO_CONFIG[p.estado];
+                            const cliente = db.clientes.find(c => c.id === p.id_cliente);
+                            return (
+                                <tr key={p.id}>
+                                    <td style={{ fontWeight: 'bold' }}>#{p.id}</td>
+                                    <td>
+                                        <div>{new Date(p.fecha_creacion).toLocaleDateString('es-AR')}</div>
+                                        <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+                                            {new Date(p.fecha_creacion).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div style={{ fontWeight: 500 }}>{cliente?.nombre || 'Desconocido'}</div>
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{cliente?.telefono}</div>
+                                    </td>
+                                    <td style={{ maxWidth: '200px' }}>
+                                        <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={cliente?.direccion}>
+                                            {cliente?.direccion || '-'}
+                                        </div>
+                                        {p.nota_delivery && (
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--warning)', marginTop: 4 }}>
+                                                📝 {p.nota_delivery}
+                                            </div>
+                                        )}
+                                    </td>
+                                    <td>
+                                        <span className="stock-badge" style={{ backgroundColor: `${config.color}20`, color: config.color, padding: '4px 8px', borderRadius: '12px' }}>
+                                            {config.icon} {p.estado}
+                                        </span>
+                                    </td>
+                                    <td style={{ fontWeight: 'bold' }}>{fmtMoney(p.total)}</td>
+                                    <td>
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                            {p.estado === EstadoPedido.Pendiente && (
+                                                <>
+                                                    <button className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem' }} onClick={() => handleActualizarEstado(p.id, EstadoPedido.EnCamino)}>
+                                                        🛵 En Camino
+                                                    </button>
+                                                    <button className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem', color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => handleActualizarEstado(p.id, EstadoPedido.Cancelado)}>
+                                                        ❌ Cancelar
+                                                    </button>
+                                                </>
+                                            )}
+                                            {p.estado === EstadoPedido.EnCamino && (
+                                                <button className="checkout-btn" style={{ padding: '6px 12px', fontSize: '0.8rem' }} onClick={() => handleActualizarEstado(p.id, EstadoPedido.Entregado)}>
+                                                    ✅ Entregar y Cobrar
+                                                </button>
+                                            )}
+                                            {cliente?.telefono && (
+                                                <button
+                                                    className="btn-secondary"
+                                                    style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#25D366', borderColor: '#25D366' }}
+                                                    onClick={() => {
+                                                        const cleanPhone = cliente.telefono.replace(/\D/g, '');
+                                                        // Format items list properly
+                                                        const itemsText = p.items.map(i => `- ${i.qty} ${i.isGranel ? 'kg' : 'unid'} de ${i.nombre}`).join('%0A');
+                                                        const msg = `Hola ${cliente.nombre}! Te escribimos de FJ Mascotas referente a tu pedido #${p.id}.%0A%0A*Detalle del pedido:*%0A${itemsText}%0A%0ATotal: ${fmtMoney(p.total)}%0AEstado: ${p.estado}%0A%0A¿En qué te podemos ayudar?`;
+                                                        window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
+                                                    }}
+                                                >
+                                                    WhatsApp
+                                                </button>
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                        {pedidos.length === 0 && (
+                            <tr>
+                                <td colSpan={7} style={{ textAlign: 'center', padding: '32px', color: 'var(--muted)' }}>
+                                    No hay pedidos registrados
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+// ── Clientes Screen (CRM) ──────────────────────────────────
+function ClientesScreen() {
+    const [clientes, setClientes] = useState<Cliente[]>([]);
+    const [query, setQuery] = useState('');
+    const [refresh, setRefresh] = useState(0);
+
+    React.useEffect(() => {
+        setClientes(getClientes());
+    }, [refresh]);
+
+    const filtered = clientes.filter(c => c.nombre.toLowerCase().includes(query.toLowerCase()) || c.telefono.includes(query));
+
+    const totalRegistrados = clientes.length;
+    const clientesFrecuentes = clientes.filter(c => c.total_compras > 0).length;
+
+    return (
+        <div style={{ padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                <h1 style={{ margin: 0, fontSize: '1.8rem', color: 'var(--text)' }}>👥 Relación con Clientes (CRM)</h1>
+            </div>
+
+            <div className="weekly-summary-cards" style={{ marginBottom: 24, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+                <div className="summary-card">
+                    <div className="sc-icon">📊</div>
+                    <div className="sc-label">Total Registrados</div>
+                    <div className="sc-value">{totalRegistrados}</div>
+                </div>
+                <div className="summary-card">
+                    <div className="sc-icon">🌟</div>
+                    <div className="sc-label">Clientes con Compras</div>
+                    <div className="sc-value" style={{ color: 'var(--accent)' }}>{clientesFrecuentes}</div>
+                </div>
+            </div>
+
+            <div className="table-container">
+                <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
+                    <div className="search-bar search-compact" style={{ width: '300px' }}>
+                        <span>🔍</span>
+                        <input type="text" placeholder="Buscar por nombre o teléfono..." value={query} onChange={e => setQuery(e.target.value)} />
+                        {query && <button className="search-clear" onClick={() => setQuery('')}>✕</button>}
+                    </div>
+                </div>
+                <table className="inventory-table">
+                    <thead>
+                        <tr>
+                            <th>Nº C.</th>
+                            <th>Cliente</th>
+                            <th>Contacto</th>
+                            <th>Dirección Guardada</th>
+                            <th>Registro</th>
+                            <th>Total Compras (Histórico)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filtered.map((c) => (
+                            <tr key={c.id}>
+                                <td style={{ color: 'var(--muted)' }}>#{c.id}</td>
+                                <td style={{ fontWeight: 'bold' }}>{c.nombre}</td>
+                                <td>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        {c.telefono}
+                                        <button className="icon-btn" title="Mensaje WhatsApp" onClick={() => {
+                                            const clean = c.telefono.replace(/\D/g, '');
+                                            window.open(`https://wa.me/${clean}?text=Hola ${c.nombre}, te escribimos de FJ Mascotas. ¡Tenemos nuevas ofertas para ti!`, '_blank');
+                                        }}>
+                                            💬
+                                        </button>
+                                    </div>
+                                </td>
+                                <td style={{ maxWidth: '250px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.direccion}>
+                                    {c.direccion || '-'}
+                                </td>
+                                <td style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                    {new Date(c.fecha_registro).toLocaleDateString('es-AR')}
+                                </td>
+                                <td>
+                                    {c.total_compras > 0 ? (
+                                        <span style={{ fontWeight: 'bold', color: 'var(--success)' }}>{fmtMoney(c.total_compras)}</span>
+                                    ) : (
+                                        <span style={{ color: 'var(--muted)' }}>Sin compras</span>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                        {filtered.length === 0 && (
+                            <tr>
+                                <td colSpan={6} style={{ textAlign: 'center', padding: '32px', color: 'var(--muted)' }}>
+                                    No se encontraron clientes.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
             </div>
         </div>
     );
