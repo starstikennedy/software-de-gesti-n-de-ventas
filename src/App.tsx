@@ -3,7 +3,7 @@ import {
     db, seedData, fmtMoney, checkout, cargarStock, agregarProducto, editarProducto, abrirSaco,
     getReporteDiario, getReporteSemanal, getReporteMensual, getProducto, getEspecies, getCategorias,
     agregarFactura, actualizarEstadoFactura, getFacturas, editarFactura, pagarFactura, cancelarPago,
-    crearCliente, editarCliente, crearPedido, getPedidos, actualizarEstadoPedido, getClientes,
+    crearCliente, editarCliente, crearPedido, getPedidos, editarPedido, actualizarEstadoPedido, getClientes,
     MetodoPago, EstadoFactura, EstadoPedido, type Producto, type ItemCarrito, type Factura, type TipoFactura, type Cliente, type Pedido
 } from './pos';
 
@@ -90,7 +90,7 @@ export default function App() {
                 {tab === 'informes' && <InformesScreen key={refresh} />}
                 {tab === 'facturas' && <FacturasScreen key={refresh} addToast={addToast} />}
                 {tab === 'pedidos' && <PedidosScreen key={refresh} addToast={addToast} />}
-                {tab === 'clientes' && <ClientesScreen key={refresh} />}
+                {tab === 'clientes' && <ClientesScreen key={refresh} addToast={addToast} />}
                 {tab === 'ordenes' && <PurchaseOrderScreen key={refresh} addToast={addToast} />}
             </main>
 
@@ -806,17 +806,18 @@ function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
     onSave: () => void;
 }) {
     const isEdit = !!productoToEdit;
-    const [form, setForm] = useState({ 
-        nombre: productoToEdit?.nombre || '', 
-        sku: productoToEdit?.sku || '', 
-        pventa: productoToEdit?.precio_venta?.toString() || '', 
-        pcosto: productoToEdit?.precio_costo?.toString() || '', 
-        stock: productoToEdit?.stock_actual?.toString() || '', 
-        stockmin: productoToEdit?.stock_minimo?.toString() || '5', 
-        cat: productoToEdit?.categoria || '', 
-        especie: productoToEdit?.especie || 'Perro', 
-        emoji: productoToEdit?.emoji || '', 
-        imagen: productoToEdit?.imagen || '', 
+    const [form, setForm] = useState({
+        nombre: productoToEdit?.nombre || '',
+        sku: productoToEdit?.sku || '',
+        pventa: productoToEdit?.precio_venta?.toString() || '',
+        pcosto: productoToEdit?.precio_costo?.toString() || '',
+        stock: productoToEdit?.stock_actual?.toString() || '',
+        stockmin: productoToEdit?.stock_minimo?.toString() || '5',
+        cat: productoToEdit?.categoria || '',
+        especie: productoToEdit?.especie || 'Perro',
+        emoji: productoToEdit?.emoji || '',
+        imagen: productoToEdit?.imagen || '',
+        peso_kg: productoToEdit?.peso_kg?.toString() || '',
         venta_a_granel: productoToEdit?.venta_a_granel || false,
         id_producto_suelto: productoToEdit?.id_producto_suelto?.toString() || '',
         kilos_por_saco: productoToEdit?.kilos_por_saco?.toString() || '',
@@ -832,13 +833,14 @@ function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
             sku: form.sku.trim() || (isEdit ? productoToEdit!.sku : `SKU-${Date.now()}`),
             precio_venta: parseFloat(form.pventa),
             precio_costo: parseFloat(form.pcosto) || 0,
-            stock_actual: parseInt(form.stock) || 0,
+            stock_actual: form.venta_a_granel ? parseFloat(form.stock) || 0 : parseInt(form.stock) || 0,
             stock_minimo: parseInt(form.stockmin) || 5,
             categoria: (form.cat === '+ NUEVA' ? form.catCustom.trim() : form.cat.trim()) || 'General',
             especie: form.especie || 'Perro',
             emoji: form.emoji.trim() || '🛍️',
             imagen: form.imagen.trim() || undefined,
-            venta_a_granel: form.venta_a_granel,
+            peso_kg: form.peso_kg ? parseFloat(form.peso_kg) : undefined,
+            venta_a_granel: form.venta_a_granel || undefined,
             id_producto_suelto: form.id_producto_suelto ? parseInt(form.id_producto_suelto) : undefined,
             kilos_por_saco: form.kilos_por_saco ? parseFloat(form.kilos_por_saco) : undefined,
         };
@@ -856,23 +858,61 @@ function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
     };
 
     const productosGranel = db.productos.filter(p => p.venta_a_granel && p.id !== productoToEdit?.id);
-    const categoriasExistentes = getCategorias();
+    // Excluir 'Todos' que es un valor de filtro, no una categoría real
+    const categoriasExistentes = getCategorias().filter(c => c !== 'Todos');
 
     return (
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="modal" style={{ width: 560, maxHeight: '90vh', overflowY: 'auto' }}>
-                <div className="modal-title">{isEdit ? '✏️ Editar Producto' : '➕ Nuevo Producto'}</div>
-                <div className="modal-body">
+            {/* Modal con header y footer fijos, solo el body scrollea */}
+            <div className="modal" style={{ width: 560, maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
+                <div className="modal-title" style={{ flexShrink: 0 }}>{isEdit ? '✏️ Editar Producto' : '➕ Nuevo Producto'}</div>
+                <div className="modal-body" style={{ overflowY: 'auto', flex: 1 }}>
+
+                    {/* Sección granel arriba para que defina el contexto del resto */}
+                    <div style={{ marginBottom: 16, padding: 12, background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}>
+                            <input type="checkbox" checked={form.venta_a_granel} onChange={set('venta_a_granel')} style={{ width: 18, height: 18, flexShrink: 0 }} />
+                            <div>
+                                <div style={{ fontWeight: 600 }}>⚖️ Producto a Granel</div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: 2 }}>Se vende suelto por kg. El stock representa kilos disponibles.</div>
+                            </div>
+                        </label>
+                    </div>
+
                     <div className="form-row">
                         <div className="form-group">
                             <div className="form-label">Nombre *</div>
-                            <input className="form-input" placeholder="Ej: Royal Canin Adulto 3kg" value={form.nombre} onChange={set('nombre')} />
+                            <input className="form-input" placeholder="Ej: Royal Canin Adulto 3kg" value={form.nombre} onChange={set('nombre')} autoFocus />
                         </div>
                         <div className="form-group">
                             <div className="form-label">SKU / Código</div>
                             <input className="form-input" placeholder="Ej: RC-AD-3" value={form.sku} onChange={set('sku')} />
                         </div>
                     </div>
+
+                    <div className="form-row">
+                        <div className="form-group">
+                            <div className="form-label">{form.venta_a_granel ? 'Precio de Venta por Kg *' : 'Precio de Venta *'}</div>
+                            <input className="form-input" type="number" placeholder="0" step="1" min="0" value={form.pventa} onChange={set('pventa')} />
+                            {form.venta_a_granel && <div style={{ fontSize: '0.78rem', color: 'var(--accent)', marginTop: 4 }}>💡 Este es el precio por cada kilogramo vendido</div>}
+                        </div>
+                        <div className="form-group">
+                            <div className="form-label">Precio Costo</div>
+                            <input className="form-input" type="number" placeholder="0" step="1" min="0" value={form.pcosto} onChange={set('pcosto')} />
+                        </div>
+                    </div>
+
+                    <div className="form-row">
+                        <div className="form-group">
+                            <div className="form-label">{form.venta_a_granel ? 'Stock Inicial (kg)' : 'Stock Inicial (unidades)'}</div>
+                            <input className="form-input" type="number" placeholder="0" min="0" step={form.venta_a_granel ? '0.5' : '1'} value={form.stock} onChange={set('stock')} />
+                        </div>
+                        <div className="form-group">
+                            <div className="form-label">{form.venta_a_granel ? 'Stock Mínimo (kg)' : 'Stock Mínimo (unidades)'}</div>
+                            <input className="form-input" type="number" placeholder="5" min="0" step={form.venta_a_granel ? '0.5' : '1'} value={form.stockmin} onChange={set('stockmin')} />
+                        </div>
+                    </div>
+
                     <div className="form-row">
                         <div className="form-group">
                             <div className="form-label">Especie / Mascota</div>
@@ -891,72 +931,52 @@ function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
                             <select className="form-input" value={form.cat} onChange={set('cat')}>
                                 <option value="">-- Seleccionar --</option>
                                 {categoriasExistentes.map(c => <option key={c} value={c}>{c}</option>)}
-                                <option value="+ NUEVA">➕ Agregar Nueva...</option>
+                                <option value="+ NUEVA">➕ Nueva categoría...</option>
                             </select>
                             {form.cat === '+ NUEVA' && (
-                                <input className="form-input" style={{ marginTop: 8 }} placeholder="Nombre de la nueva categoría" value={form.catCustom} onChange={set('catCustom')} autoFocus />
+                                <input className="form-input" style={{ marginTop: 8 }} placeholder="Nombre de la nueva categoría" value={form.catCustom} onChange={set('catCustom')} />
                             )}
                         </div>
                     </div>
-                    <div className="form-group">
-                        <div className="form-label">URL de Foto (opcional)</div>
-                        <input className="form-input" placeholder="https://..." value={form.imagen} onChange={set('imagen')} />
-                    </div>
-                    <div className="form-row">
-                        <div className="form-group">
-                            <div className="form-label">Precio Venta *</div>
-                            <input className="form-input" type="number" placeholder="0" step="0.01" value={form.pventa} onChange={set('pventa')} />
-                        </div>
-                        <div className="form-group">
-                            <div className="form-label">Precio Costo</div>
-                            <input className="form-input" type="number" placeholder="0" step="0.01" value={form.pcosto} onChange={set('pcosto')} />
-                        </div>
-                    </div>
-                    <div className="form-row">
-                        <div className="form-group">
-                            <div className="form-label">Stock Inicial</div>
-                            <input className="form-input" type="number" placeholder="0" min="0" value={form.stock} onChange={set('stock')} />
-                        </div>
-                        <div className="form-group">
-                            <div className="form-label">Stock Mínimo</div>
-                            <input className="form-input" type="number" placeholder="5" min="0" value={form.stockmin} onChange={set('stockmin')} />
-                        </div>
-                    </div>
+
                     <div className="form-row">
                         <div className="form-group">
                             <div className="form-label">Emoji (ícono)</div>
                             <input className="form-input" placeholder="🛍️" maxLength={2} value={form.emoji} onChange={set('emoji')} />
                         </div>
+                        {!form.venta_a_granel && (
+                            <div className="form-group">
+                                <div className="form-label">Peso del producto (kg, opcional)</div>
+                                <input className="form-input" type="number" placeholder="Ej: 3 o 0.5" step="0.1" min="0" value={form.peso_kg} onChange={set('peso_kg')} />
+                            </div>
+                        )}
                     </div>
-                    <div className="form-row" style={{ marginTop: 12, padding: 12, background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                        <div style={{ width: '100%' }}>
-                            <label className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none', marginBottom: 0 }}>
-                                <input type="checkbox" checked={form.venta_a_granel} onChange={set('venta_a_granel')} style={{ width: 18, height: 18 }} />
-                                <span style={{ fontWeight: 500 }}>⚖️ Producto a Granel (Se vende suelto por Kg/Plata)</span>
-                            </label>
-                            
-                            {!form.venta_a_granel && productosGranel.length > 0 && (
-                                <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px dashed var(--border)' }}>
-                                    <div style={{ fontSize: '0.9rem', marginBottom: 8, color: 'var(--muted)' }}>📦 Opcional: ¿Este producto (Saco cerrado) abastece a un producto suelto?</div>
-                                    <div className="form-row">
-                                        <div className="form-group" style={{ flex: 2 }}>
-                                            <div className="form-label">Producto a granel que abastece</div>
-                                            <select className="form-input" value={form.id_producto_suelto} onChange={set('id_producto_suelto')}>
-                                                <option value="">-- Ninguno --</option>
-                                                {productosGranel.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-                                            </select>
-                                        </div>
-                                        <div className="form-group" style={{ flex: 1 }}>
-                                            <div className="form-label">Kilos por Saco</div>
-                                            <input className="form-input" type="number" step="0.5" placeholder="Ej: 15" value={form.kilos_por_saco} onChange={set('kilos_por_saco')} disabled={!form.id_producto_suelto} />
-                                        </div>
-                                    </div>
+
+                    <div className="form-group">
+                        <div className="form-label">URL de Foto (opcional)</div>
+                        <input className="form-input" placeholder="https://..." value={form.imagen} onChange={set('imagen')} />
+                    </div>
+
+                    {!form.venta_a_granel && productosGranel.length > 0 && (
+                        <div style={{ padding: 12, background: 'var(--surface)', borderRadius: 8, border: '1px dashed var(--border)' }}>
+                            <div style={{ fontSize: '0.85rem', marginBottom: 10, color: 'var(--muted)' }}>📦 ¿Este saco cerrado abastece a un producto a granel?</div>
+                            <div className="form-row">
+                                <div className="form-group" style={{ flex: 2 }}>
+                                    <div className="form-label">Producto a granel vinculado</div>
+                                    <select className="form-input" value={form.id_producto_suelto} onChange={set('id_producto_suelto')}>
+                                        <option value="">-- Ninguno --</option>
+                                        {productosGranel.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                                    </select>
                                 </div>
-                            )}
+                                <div className="form-group" style={{ flex: 1 }}>
+                                    <div className="form-label">Kilos por Saco</div>
+                                    <input className="form-input" type="number" step="0.5" placeholder="Ej: 15" value={form.kilos_por_saco} onChange={set('kilos_por_saco')} disabled={!form.id_producto_suelto} />
+                                </div>
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
-                <div className="modal-actions">
+                <div className="modal-actions" style={{ flexShrink: 0 }}>
                     <button className="btn-secondary" onClick={onClose}>Cancelar</button>
                     <button className="btn-primary" onClick={save}>✅ Guardar Producto</button>
                 </div>
@@ -1827,12 +1847,27 @@ function InformesScreen() {
                     </div>
                 </div>
                 <div className="summary-card">
-                    <div className="sc-label">Ticket Promedio por Venta</div>
-                    <div className="sc-value">{fmtMoney(report.ticketPromedio)}</div>
-                </div>
-                <div className="summary-card">
                     <div className="sc-label">Cantidad de Operaciones</div>
                     <div className="sc-value">{report.cantidadVentas}</div>
+                </div>
+            </div>
+
+            {/* Nuevo: Desglose por Categoría de Venta */}
+            <div className="weekly-summary-cards" style={{ marginTop: 16, background: 'var(--surface)', padding: 16, borderRadius: 12 }}>
+                <div className="summary-card" style={{ background: 'transparent', border: '1px solid var(--border)' }}>
+                    <div className="sc-label">🛵 Ventas Pedidos</div>
+                    <div className="sc-value" style={{ fontSize: '1.2rem' }}>{fmtMoney(report.desglose?.pedidos?.total || 0)}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{report.desglose?.pedidos?.cantidad || 0} entregas</div>
+                </div>
+                <div className="summary-card" style={{ background: 'transparent', border: '1px solid var(--border)' }}>
+                    <div className="sc-label">⚖️ Ventas a Granel (Kilo)</div>
+                    <div className="sc-value" style={{ fontSize: '1.2rem' }}>{fmtMoney(report.desglose?.kilo?.total || 0)}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{report.desglose?.kilo?.cantidad || 0} ventas</div>
+                </div>
+                <div className="summary-card" style={{ background: 'transparent', border: '1px solid var(--border)' }}>
+                    <div className="sc-label">🛍️ Ventas Sacos Cerrados</div>
+                    <div className="sc-value" style={{ fontSize: '1.2rem' }}>{fmtMoney(report.desglose?.saco?.total || 0)}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{report.desglose?.saco?.cantidad || 0} sacos</div>
                 </div>
             </div>
 
@@ -1990,9 +2025,80 @@ function PedidoModal({ carrito, total, onClose, addToast, onSuccess }: {
 }
 
 // ── Pedidos Screen ──────────────────────────────────────────
+function EditarPedidoModal({ pedido, cliente, onClose, onGuardar }: {
+    pedido: Pedido;
+    cliente: Cliente | undefined;
+    onClose: () => void;
+    onGuardar: (idPedido: number, dataPedido: { nota_delivery?: string; metodo_pago?: MetodoPago }, idCliente?: number, nuevaDireccion?: string) => void;
+}) {
+    const [nota, setNota] = useState(pedido.nota_delivery || '');
+    const [metodo, setMetodo] = useState<MetodoPago>(pedido.metodo_pago || MetodoPago.Efectivo);
+    const [direccion, setDireccion] = useState(cliente?.direccion || '');
+
+    const handleGuardar = () => {
+        onGuardar(pedido.id, { nota_delivery: nota, metodo_pago: metodo }, cliente?.id, direccion.trim());
+    };
+
+    return (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+            <div className="modal" style={{ maxWidth: '500px' }}>
+                <div className="modal-title">✏️ Editar Pedido #{pedido.id}</div>
+                <div className="modal-body">
+                    <div className="form-group">
+                        <div className="form-label">Productos (no editables)</div>
+                        <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 14px', fontSize: '0.9rem', color: 'var(--muted)' }}>
+                            {pedido.items.map((i, idx) => (
+                                <div key={idx}>• {i.qty}{i.isGranel ? 'kg' : ' unid'} de {i.nombre}</div>
+                            ))}
+                            <div style={{ marginTop: 8, fontWeight: 600, color: 'var(--text)' }}>Total: {fmtMoney(pedido.total)}</div>
+                        </div>
+                    </div>
+                    {cliente && (
+                        <div className="form-group">
+                            <div className="form-label">Direccion de entrega</div>
+                            <input className="form-input" value={direccion} onChange={e => setDireccion(e.target.value)} placeholder="Ej: Calle Falsa 123, Barrio Norte" />
+                            {direccion && (
+                                <a href={`https://maps.google.com/?q=${encodeURIComponent(direccion)}`} target="_blank" rel="noopener noreferrer"
+                                    style={{ fontSize: '0.8rem', color: 'var(--accent)', marginTop: 4, display: 'inline-block' }}>
+                                    📍 Ver en Google Maps
+                                </a>
+                            )}
+                        </div>
+                    )}
+                    <div className="form-group">
+                        <div className="form-label">Nota para el repartidor</div>
+                        <textarea className="form-input" rows={2} placeholder="Ej: Timbre no funciona, tocar la puerta" value={nota} onChange={e => setNota(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                        <div className="form-label">Forma de pago</div>
+                        <div className="payment-methods" style={{ display: 'flex', gap: '8px' }}>
+                            {([MetodoPago.Efectivo, MetodoPago.Transferencia, MetodoPago.Tarjeta] as const).map(m => {
+                                const icons = { Efectivo: '💵', Transferencia: '🏦', Tarjeta: '💳' };
+                                return (
+                                    <button key={m} className={`pay-btn${metodo === m ? ' selected' : ''}`}
+                                        style={{ flex: 1, padding: '8px 12px', fontSize: '0.9rem' }}
+                                        onClick={() => setMetodo(m)}>
+                                        <span className="pay-icon" style={{ fontSize: '1.2rem' }}>{icons[m]}</span>
+                                        <div>{m}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+                    <button className="btn-primary" onClick={handleGuardar}>💾 Guardar Cambios</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => void }) {
     const [pedidos, setPedidos] = useState<Pedido[]>([]);
     const [refresh, setRefresh] = useState(0);
+    const [editandoPedido, setEditandoPedido] = useState<Pedido | null>(null);
 
     // Fetch data
     React.useEffect(() => {
@@ -2008,11 +2114,44 @@ function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => vo
         }
     };
 
+    const handleGuardarEdicion = (idPedido: number, dataPedido: { nota_delivery?: string; metodo_pago?: MetodoPago }, idCliente?: number, nuevaDireccion?: string) => {
+        editarPedido(idPedido, dataPedido);
+        if (idCliente && nuevaDireccion !== undefined) {
+            editarCliente(idCliente, { direccion: nuevaDireccion });
+        }
+        addToast(`✅ Pedido #${idPedido} actualizado`, 'success');
+        setEditandoPedido(null);
+        setRefresh(r => r + 1);
+    };
+
     const ESTADO_CONFIG = {
         [EstadoPedido.Pendiente]: { color: 'var(--warning)', icon: '⏳' },
         [EstadoPedido.EnCamino]: { color: 'var(--accent)', icon: '🛵' },
         [EstadoPedido.Entregado]: { color: 'var(--success)', icon: '✅' },
         [EstadoPedido.Cancelado]: { color: 'var(--danger)', icon: '❌' },
+    };
+
+    const getMensajeCliente = (p: Pedido, cliente: Cliente): string => {
+        const itemsText = p.items.map(i => `🔹 ${i.qty}${i.isGranel ? 'kg' : ' unid'} de ${i.nombre}`).join('\n');
+        const metodo = p.metodo_pago || 'Efectivo';
+        switch (p.estado) {
+            case EstadoPedido.Pendiente:
+                return `Hola ${cliente.nombre}! 😊\n\nRecibimos tu pedido *#${p.id}* en *FJ Mascotas* 🐶\n\n*Detalle:*\n${itemsText}\n\n*Total: ${fmtMoney(p.total)}*\nPago: ${metodo}\n\nLo estamos preparando, te avisamos cuando salga! ✅`;
+            case EstadoPedido.EnCamino:
+                return `Hola ${cliente.nombre}! 😊\n\nTu pedido *#${p.id}* de *FJ Mascotas* ya esta en camino! 🚚\n\n*Detalle:*\n${itemsText}\n\n*Total: ${fmtMoney(p.total)}*\nPago: ${metodo}\n\nPronto llegamos! 🐶`;
+            case EstadoPedido.Entregado:
+                return `Hola ${cliente.nombre}! 😊\n\nGracias por tu compra en *FJ Mascotas* 🐶\n\nTu pedido *#${p.id}* fue entregado. ✅ Esperamos que tus mascotas lo disfruten mucho. Hasta la proxima! ⭐`;
+            default:
+                return `Hola ${cliente.nombre}! 😊 Te escribimos de *FJ Mascotas* 🐶 sobre tu pedido *#${p.id}*.\n\n*Detalle:*\n${itemsText}\n\nTotal: ${fmtMoney(p.total)}\n\nEn que te podemos ayudar?`;
+        }
+    };
+
+    const getMensajeRepartidor = (p: Pedido, cliente: Cliente): string => {
+        const itemsText = p.items.map(i => `  - ${i.qty}${i.isGranel ? 'kg' : ' unid'} de ${i.nombre}`).join('\n');
+        const metodo = p.metodo_pago || 'Efectivo';
+        let msg = `📦 PEDIDO #${p.id}\n\n👤 ${cliente.nombre}\n📱 ${cliente.telefono}\n📍 ${cliente.direccion}\n\n🛍 Productos:\n${itemsText}\n\n💰 Total: ${fmtMoney(p.total)}\n💳 Cobrar en: ${metodo}`;
+        if (p.nota_delivery) msg += `\n\n📝 Nota: ${p.nota_delivery}`;
+        return msg;
     };
 
     // Calculate sumary
@@ -2068,9 +2207,20 @@ function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => vo
                                         <div style={{ fontWeight: 500 }}>{cliente?.nombre || 'Desconocido'}</div>
                                         <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{cliente?.telefono}</div>
                                     </td>
-                                    <td style={{ maxWidth: '200px' }}>
-                                        <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={cliente?.direccion}>
-                                            {cliente?.direccion || '-'}
+                                    <td style={{ maxWidth: '220px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                                            <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }} title={cliente?.direccion}>
+                                                {cliente?.direccion || '-'}
+                                            </div>
+                                            {cliente?.direccion && (
+                                                <a
+                                                    href={`https://maps.google.com/?q=${encodeURIComponent(cliente.direccion)}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    title="Ver en Google Maps"
+                                                    style={{ flexShrink: 0, fontSize: '1rem', textDecoration: 'none' }}
+                                                >📍</a>
+                                            )}
                                         </div>
                                         {p.nota_delivery && (
                                             <div style={{ fontSize: '0.8rem', color: 'var(--warning)', marginTop: 4 }}>
@@ -2101,15 +2251,36 @@ function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => vo
                                                     ✅ Entregar y Cobrar
                                                 </button>
                                             )}
+                                            {(p.estado === EstadoPedido.Pendiente || p.estado === EstadoPedido.EnCamino) && (
+                                                <button
+                                                    className="btn-secondary"
+                                                    style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+                                                    onClick={() => setEditandoPedido(p)}
+                                                >
+                                                    ✏️ Editar
+                                                </button>
+                                            )}
+                                            {cliente && (
+                                                <button
+                                                    className="btn-secondary"
+                                                    style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+                                                    title="Copiar mensaje para el repartidor"
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(getMensajeRepartidor(p, cliente));
+                                                        addToast('📋 Mensaje del repartidor copiado', 'success');
+                                                    }}
+                                                >
+                                                    📋 Repartidor
+                                                </button>
+                                            )}
                                             {cliente?.telefono && (
                                                 <button
                                                     className="btn-secondary"
-                                                    style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#25D366', borderColor: '#25D366' }}
+                                                    style={{ padding: '6px 10px', fontSize: '0.8rem', color: '#25D366', borderColor: '#25D366' }}
+                                                    title={`Enviar WhatsApp (estado: ${p.estado})`}
                                                     onClick={() => {
                                                         const cleanPhone = cliente.telefono.replace(/\D/g, '');
-                                                        // Format items list properly
-                                                        const itemsText = p.items.map(i => `- ${i.qty} ${i.isGranel ? 'kg' : 'unid'} de ${i.nombre}`).join('%0A');
-                                                        const msg = `Hola ${cliente.nombre}! Te escribimos de FJ Mascotas referente a tu pedido #${p.id}.%0A%0A*Detalle del pedido:*%0A${itemsText}%0A%0ATotal: ${fmtMoney(p.total)}%0AEstado: ${p.estado}%0A%0A¿En qué te podemos ayudar?`;
+                                                        const msg = encodeURIComponent(getMensajeCliente(p, cliente));
                                                         window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
                                                     }}
                                                 >
@@ -2131,15 +2302,79 @@ function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => vo
                     </tbody>
                 </table>
             </div>
+
+            {editandoPedido && (
+                <EditarPedidoModal
+                    pedido={editandoPedido}
+                    cliente={db.clientes.find(c => c.id === editandoPedido.id_cliente)}
+                    onClose={() => setEditandoPedido(null)}
+                    onGuardar={handleGuardarEdicion}
+                />
+            )}
+        </div>
+    );
+}
+
+// ── Modal Editar Cliente ─────────────────────────────────────
+function EditarClienteModal({ cliente, onClose, onGuardar }: {
+    cliente: Cliente;
+    onClose: () => void;
+    onGuardar: (id: number, data: { nombre: string; telefono: string; direccion: string; notas: string }) => void;
+}) {
+    const [nombre, setNombre] = useState(cliente.nombre);
+    const [telefono, setTelefono] = useState(cliente.telefono);
+    const [direccion, setDireccion] = useState(cliente.direccion);
+    const [notas, setNotas] = useState(cliente.notas || '');
+
+    return (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+            <div className="modal" style={{ maxWidth: '480px' }}>
+                <div className="modal-title">✏️ Editar Cliente #{cliente.id}</div>
+                <div className="modal-body">
+                    <div className="form-group">
+                        <div className="form-label">Nombre *</div>
+                        <input className="form-input" value={nombre} onChange={e => setNombre(e.target.value)} autoFocus />
+                    </div>
+                    <div className="form-group">
+                        <div className="form-label">Teléfono *</div>
+                        <input className="form-input" value={telefono} onChange={e => setTelefono(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                        <div className="form-label">Dirección</div>
+                        <input className="form-input" placeholder="Ej: Calle Falsa 123, Barrio Norte" value={direccion} onChange={e => setDireccion(e.target.value)} />
+                        {direccion && (
+                            <a
+                                href={`https://maps.google.com/?q=${encodeURIComponent(direccion)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ fontSize: '0.8rem', color: 'var(--accent)', marginTop: 4, display: 'inline-block' }}
+                            >
+                                📍 Ver en Google Maps
+                            </a>
+                        )}
+                    </div>
+                    <div className="form-group">
+                        <div className="form-label">Notas internas</div>
+                        <textarea className="form-input" rows={2} placeholder="Ej: Paga siempre en efectivo, perro Labrador..." value={notas} onChange={e => setNotas(e.target.value)} />
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+                    <button className="btn-primary" onClick={() => onGuardar(cliente.id, { nombre: nombre.trim(), telefono: telefono.trim(), direccion: direccion.trim(), notas: notas.trim() })}>
+                        💾 Guardar Cambios
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
 
 // ── Clientes Screen (CRM) ──────────────────────────────────
-function ClientesScreen() {
+function ClientesScreen({ addToast }: { addToast: (m: string, t: ToastType) => void }) {
     const [clientes, setClientes] = useState<Cliente[]>([]);
     const [query, setQuery] = useState('');
     const [refresh, setRefresh] = useState(0);
+    const [editando, setEditando] = useState<Cliente | null>(null);
 
     React.useEffect(() => {
         setClientes(getClientes());
@@ -2149,6 +2384,13 @@ function ClientesScreen() {
 
     const totalRegistrados = clientes.length;
     const clientesFrecuentes = clientes.filter(c => c.total_compras > 0).length;
+
+    const handleGuardar = (id: number, data: { nombre: string; telefono: string; direccion: string; notas: string }) => {
+        editarCliente(id, data);
+        addToast('✅ Cliente actualizado', 'success');
+        setEditando(null);
+        setRefresh(r => r + 1);
+    };
 
     return (
         <div style={{ padding: '24px' }}>
@@ -2183,29 +2425,46 @@ function ClientesScreen() {
                             <th>Nº C.</th>
                             <th>Cliente</th>
                             <th>Contacto</th>
-                            <th>Dirección Guardada</th>
+                            <th>Dirección</th>
                             <th>Registro</th>
-                            <th>Total Compras (Histórico)</th>
+                            <th>Total Compras</th>
+                            <th>Acciones</th>
                         </tr>
                     </thead>
                     <tbody>
                         {filtered.map((c) => (
                             <tr key={c.id}>
                                 <td style={{ color: 'var(--muted)' }}>#{c.id}</td>
-                                <td style={{ fontWeight: 'bold' }}>{c.nombre}</td>
+                                <td>
+                                    <div style={{ fontWeight: 'bold' }}>{c.nombre}</div>
+                                    {c.notas && <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: 2 }}>📌 {c.notas}</div>}
+                                </td>
                                 <td>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                         {c.telefono}
-                                        <button className="icon-btn" title="Mensaje WhatsApp" onClick={() => {
+                                        <button className="icon-btn" title="Abrir WhatsApp" onClick={() => {
                                             const clean = c.telefono.replace(/\D/g, '');
-                                            window.open(`https://wa.me/${clean}?text=Hola ${c.nombre}, te escribimos de FJ Mascotas. ¡Tenemos nuevas ofertas para ti!`, '_blank');
+                                            window.open(`https://wa.me/${clean}?text=${encodeURIComponent(`Hola ${c.nombre}, te escribimos de FJ Mascotas 🐾 ¿En qué te podemos ayudar?`)}`, '_blank');
                                         }}>
                                             💬
                                         </button>
                                     </div>
                                 </td>
-                                <td style={{ maxWidth: '250px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.direccion}>
-                                    {c.direccion || '-'}
+                                <td style={{ maxWidth: '220px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.direccion}>
+                                            {c.direccion || <span style={{ color: 'var(--muted)' }}>-</span>}
+                                        </span>
+                                        {c.direccion && (
+                                            <a
+                                                href={`https://maps.google.com/?q=${encodeURIComponent(c.direccion)}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                title="Ver en Google Maps"
+                                                style={{ flexShrink: 0, textDecoration: 'none' }}
+                                            >📍</a>
+                                        )}
+                                    </div>
                                 </td>
                                 <td style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
                                     {new Date(c.fecha_registro).toLocaleDateString('es-AR')}
@@ -2217,11 +2476,20 @@ function ClientesScreen() {
                                         <span style={{ color: 'var(--muted)' }}>Sin compras</span>
                                     )}
                                 </td>
+                                <td>
+                                    <button
+                                        className="btn-secondary"
+                                        style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                                        onClick={() => setEditando(c)}
+                                    >
+                                        ✏️ Editar
+                                    </button>
+                                </td>
                             </tr>
                         ))}
                         {filtered.length === 0 && (
                             <tr>
-                                <td colSpan={6} style={{ textAlign: 'center', padding: '32px', color: 'var(--muted)' }}>
+                                <td colSpan={7} style={{ textAlign: 'center', padding: '32px', color: 'var(--muted)' }}>
                                     No se encontraron clientes.
                                 </td>
                             </tr>
@@ -2229,6 +2497,14 @@ function ClientesScreen() {
                     </tbody>
                 </table>
             </div>
+
+            {editando && (
+                <EditarClienteModal
+                    cliente={editando}
+                    onClose={() => setEditando(null)}
+                    onGuardar={handleGuardar}
+                />
+            )}
         </div>
     );
 }

@@ -69,31 +69,32 @@ export interface ItemCarrito {
 }
 
 // ── 3. FACTURAS, PEDIDOS Y CLIENTES ──────────────────────────
+
 export enum EstadoFactura {
     PorPagar = 'Por Pagar',
     Pagada = 'Pagada',
     Vencida = 'Vencida',
-    Anulada = 'Anulada'
+    Anulada = 'Anulada',
 }
 
 export type TipoFactura = 'Compra' | 'Venta';
 
 export interface Factura {
     id: number;
-    numero: string;
+    numero: string;         // Ej: FAC-001
     tipo: TipoFactura;
     proveedor_cliente: string;
     descripcion: string;
     monto_total: number;
-    fecha_emision: string; // YYYY-MM-DD
-    fecha_vencimiento: string; // YYYY-MM-DD
+    fecha_emision: string;  // ISO date string
+    fecha_vencimiento: string; // ISO date string
     estado: EstadoFactura;
-    responsable_subida?: string;
-    responsable_pago?: string;
-    metodo_pago_final?: string;
-    fecha_pago?: string;
     notas?: string;
-    imagen_url?: string;
+    imagen_url?: string;    // base64 data URL de la foto de la factura
+    responsable_subida?: string;  // quién subió la factura al sistema
+    responsable_pago?: string;    // quién es responsable de pagar
+    metodo_pago_final?: string;   // Efectivo / Transferencia / Depósito / Tarjeta
+    fecha_pago?: string;          // ISO date string de cuándo se pagó
 }
 
 export interface Cliente {
@@ -167,11 +168,6 @@ export function seedData(): void {
         // Higiene
         { id: 12, nombre: 'Arena Sanitaria 5L', sku: 'AR-5L', precio_venta: 5500, precio_costo: 3200, stock_actual: 0, stock_minimo: 4, categoria: 'Higiene', especie: 'Gato', emoji: '🧹', peso_kg: 5 },
         { id: 13, nombre: 'Shampoo Medicado 250ml', sku: 'SH-MED', precio_venta: 6200, precio_costo: 3800, stock_actual: 9, stock_minimo: 3, categoria: 'Higiene', especie: 'Perro', emoji: '🛁' },
-        
-        // Alimento Suelto (Ejemplo Mauri)
-        { id: 14, nombre: 'Master Dog Adulto Carne (Suelto)', sku: 'MD-AD-SU', precio_venta: 3000, precio_costo: 2000, stock_actual: 20, stock_minimo: 5, categoria: 'Alimento', especie: 'Perro', emoji: '⚖️', venta_a_granel: true },
-        // Saco Cerrado (vinculado al suelto)
-        { id: 15, nombre: 'Master Dog Adulto Carne 15kg (Saco)', sku: 'MD-AD-15', precio_venta: 31000, precio_costo: 22000, stock_actual: 4, stock_minimo: 1, categoria: 'Alimento', especie: 'Perro', emoji: '🛍️', id_producto_suelto: 14, kilos_por_saco: 15 },
     ];
 }
 
@@ -265,7 +261,7 @@ export function cargarStock(productoId: number, cantidad: number, nota = 'Carga 
     return true;
 }
 
-// ── 8. AGREGAR PRODUCTO ──────────────────────────────────────
+// ── 8. AGREGAR/EDITAR PRODUCTOS ──────────────────────────────
 export function agregarProducto(data: Omit<Producto, 'id'>): Producto {
     const newId = nextId(db.productos);
     const prod: Producto = { id: newId, ...data };
@@ -280,14 +276,325 @@ export function editarProducto(id: number, data: Partial<Omit<Producto, 'id'>>):
     return true;
 }
 
-export function abrirSaco(idSaco: number): { ok: boolean; error?: string } {
+// ── 9. REPORTE DIARIO ────────────────────────────────────────
+export interface DesgloseCategoria {
+    total: number;
+    cantidad: number;
+}
+
+export interface ReporteDiario {
+    fecha: string;
+    totalVentas: number;
+    totalCosto: number;
+    totalUtilidad: number;
+    cantidadVentas: number;
+    porMetodo: Record<MetodoPago, { total: number; cantidad: number }>;
+    // Nuevo: Desglose por tipo/categoría de venta
+    desglose: {
+        pedidos: DesgloseCategoria; // Ventas vía delivery/pedidos
+        kilo: DesgloseCategoria;    // Ventas de productos a granel
+        saco: DesgloseCategoria;    // Ventas de sacos cerrados
+    };
+    ventas: (Venta & { items: (DetalleVenta & { producto: Producto | undefined })[] })[];
+}
+
+export function getReporteDiario(fecha = new Date()): ReporteDiario {
+    const dayStr = fecha.toDateString();
+    const ventasHoy = db.ventas.filter((v) => new Date(v.fecha_hora).toDateString() === dayStr);
+    
+    const totalVentas = ventasHoy.reduce((s, v) => s + v.total_venta, 0);
+    const totalCosto = ventasHoy.reduce((s, v) => s + (v.total_costo || 0), 0);
+    const totalUtilidad = ventasHoy.reduce((s, v) => s + (v.utilidad || 0), 0);
+
+    const porMetodo: ReporteDiario['porMetodo'] = {
+        [MetodoPago.Efectivo]: { total: 0, cantidad: 0 },
+        [MetodoPago.Transferencia]: { total: 0, cantidad: 0 },
+        [MetodoPago.Tarjeta]: { total: 0, cantidad: 0 },
+    };
+
+    const desglose: ReporteDiario['desglose'] = {
+        pedidos: { total: 0, cantidad: 0 },
+        kilo: { total: 0, cantidad: 0 },
+        saco: { total: 0, cantidad: 0 },
+    };
+
+    ventasHoy.forEach((v) => {
+        porMetodo[v.metodo_pago].total += v.total_venta;
+        porMetodo[v.metodo_pago].cantidad++;
+
+        // Identificar si es un pedido
+        const esPedido = db.pedidos.some(p => p.id_venta === v.id_venta);
+        if (esPedido) {
+            desglose.pedidos.total += v.total_venta;
+            desglose.pedidos.cantidad++;
+        }
+
+        // Analizar items para Kilo vs Saco
+        const detalles = db.detalle_venta.filter(d => d.id_venta === v.id_venta);
+        detalles.forEach(d => {
+            const prod = getProducto(d.id_producto);
+            if (!prod) return;
+            
+            if (prod.venta_a_granel) {
+                desglose.kilo.total += d.subtotal;
+                desglose.kilo.cantidad++;
+            } else if (prod.id_producto_suelto) {
+                desglose.saco.total += d.subtotal;
+                desglose.saco.cantidad++;
+            }
+        });
+    });
+
+    const ventas = ventasHoy.map((v) => ({
+        ...v,
+        items: db.detalle_venta
+            .filter((d) => d.id_venta === v.id_venta)
+            .map((d) => ({ ...d, producto: getProducto(d.id_producto) })),
+    }));
+
+    return { fecha: dayStr, totalVentas, totalCosto, totalUtilidad, cantidadVentas: ventasHoy.length, porMetodo, desglose, ventas };
+}
+
+// ── 10. UTILIDADES ───────────────────────────────────────────
+export const getProductosBajoStock = (): Producto[] =>
+    db.productos.filter((p) => p.stock_actual > 0 && p.stock_actual <= p.stock_minimo);
+
+export const getProductosSinStock = (): Producto[] =>
+    db.productos.filter((p) => p.stock_actual === 0);
+
+export const getHistorialProducto = (id: number): MovimientoStock[] =>
+    db.movimientos_stock.filter((m) => m.id_producto === id);
+
+// ── 11. UTILIDAD DE FORMATO ──────────────────────────────────
+export function fmtMoney(n: number): string {
+    return new Intl.NumberFormat('es-AR', {
+        style: 'currency',
+        currency: 'ARS',
+        minimumFractionDigits: 0,
+    }).format(n);
+}
+
+// ── 12. REPORTE SEMANAL ──────────────────────────────────────
+export interface DiaReporte {
+    fecha: Date;
+    label: string;       // Ej: "Lun 10"
+    totalVentas: number;
+    totalCosto: number;
+    totalUtilidad: number;
+    cantidadVentas: number;
+    porMetodo: Record<MetodoPago, { total: number; cantidad: number }>;
+    desglose: {
+        pedidos: number;
+        kilo: number;
+        saco: number;
+    };
+    topProductos: { nombre: string; emoji: string; cantidad: number }[];
+}
+
+export interface ReporteSemanal {
+    dias: DiaReporte[];
+    totalSemana: number;
+    totalCostoSemana: number;
+    totalUtilidadSemana: number;
+    cantidadSemana: number;
+    maxDiario: number; // para escalar el gráfico de barras
+}
+
+export interface ReporteMensual {
+    totalVentas: number;
+    totalCosto: number;
+    totalUtilidad: number;
+    cantidadVentas: number;
+    margenPromedio: number;
+    ticketPromedio: number;
+    desglose: {
+        pedidos: { total: number; cantidad: number };
+        kilo: { total: number; cantidad: number };
+        saco: { total: number; cantidad: number };
+    };
+    topProducto?: {
+        nombre: string;
+        emoji: string;
+        totalBruto: number;
+        cantidad: number;
+    };
+}
+
+export function getReporteSemanal(fechaBase = new Date()): ReporteSemanal {
+    const dias: DiaReporte[] = [];
+    const DIAS_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+    // Generar los 7 días (hoy + 6 anteriores, en orden cronológico)
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(fechaBase);
+        d.setDate(d.getDate() - i);
+        d.setHours(0, 0, 0, 0);
+
+        const dayStr = d.toDateString();
+        const ventasDia = db.ventas.filter((v) => new Date(v.fecha_hora).toDateString() === dayStr);
+        
+        const totalVentas = ventasDia.reduce((s, v) => s + v.total_venta, 0);
+        const totalCosto = ventasDia.reduce((s, v) => s + (v.total_costo || 0), 0);
+        const totalUtilidad = ventasDia.reduce((s, v) => s + (v.utilidad || 0), 0);
+
+        const porMetodo: DiaReporte['porMetodo'] = {
+            [MetodoPago.Efectivo]: { total: 0, cantidad: 0 },
+            [MetodoPago.Transferencia]: { total: 0, cantidad: 0 },
+            [MetodoPago.Tarjeta]: { total: 0, cantidad: 0 },
+        };
+
+        const desgloseTotal = { pedidos: 0, kilo: 0, saco: 0 };
+
+        ventasDia.forEach((v) => {
+            porMetodo[v.metodo_pago].total += v.total_venta;
+            porMetodo[v.metodo_pago].cantidad++;
+
+            // Desglose simplificado para el gráfico semanal
+            const esPedido = db.pedidos.some(p => p.id_venta === v.id_venta);
+            if (esPedido) desgloseTotal.pedidos += v.total_venta;
+
+            db.detalle_venta.filter(dt => dt.id_venta === v.id_venta).forEach(dt => {
+                const prod = getProducto(dt.id_producto);
+                if (!prod) return;
+                if (prod.venta_a_granel) desgloseTotal.kilo += dt.subtotal;
+                else if (prod.id_producto_suelto) desgloseTotal.saco += dt.subtotal;
+            });
+        });
+
+        // Top productos del día
+        const conteo: Record<number, { nombre: string; emoji: string; cantidad: number }> = {};
+        ventasDia.forEach((v) => {
+            db.detalle_venta
+                .filter((dt) => dt.id_venta === v.id_venta)
+                .forEach((dt) => {
+                    const prod = getProducto(dt.id_producto);
+                    if (!prod) return;
+                    if (!conteo[dt.id_producto]) conteo[dt.id_producto] = { nombre: prod.nombre, emoji: prod.emoji, cantidad: 0 };
+                    conteo[dt.id_producto].cantidad += dt.cantidad;
+                });
+        });
+        const topProductos = Object.values(conteo)
+            .sort((a, b) => b.cantidad - a.cantidad)
+            .slice(0, 3);
+
+        const dayLabel = `${DIAS_ES[d.getDay()]} ${d.getDate()}`;
+        dias.push({ fecha: d, label: dayLabel, totalVentas, totalCosto, totalUtilidad, cantidadVentas: ventasDia.length, porMetodo, desglose: desgloseTotal, topProductos });
+    }
+
+    const totalSemana = dias.reduce((s, d) => s + d.totalVentas, 0);
+    const totalCostoSemana = dias.reduce((s, d) => s + d.totalCosto, 0);
+    const totalUtilidadSemana = dias.reduce((s, d) => s + d.totalUtilidad, 0);
+    const cantidadSemana = dias.reduce((s, d) => s + d.cantidadVentas, 0);
+    const maxDiario = Math.max(...dias.map((d) => d.totalVentas), 1);
+
+    return { dias, totalSemana, totalCostoSemana, totalUtilidadSemana, cantidadSemana, maxDiario };
+}
+
+// ── 13. REPORTE MENSUAL ──────────────────────────────────────
+export function getReporteMensual(year: number, month: number): ReporteMensual {
+    const ventasMes = db.ventas.filter((v) => {
+        const d = new Date(v.fecha_hora);
+        return d.getFullYear() === year && (d.getMonth() + 1) === month;
+    });
+
+    const totalVentas = ventasMes.reduce((s, v) => s + v.total_venta, 0);
+    const totalCosto = ventasMes.reduce((s, v) => s + (v.total_costo || 0), 0);
+    const totalUtilidad = ventasMes.reduce((s, v) => s + (v.utilidad || 0), 0);
+    const cantidadVentas = ventasMes.length;
+
+    const margenPromedio = totalVentas > 0 ? (totalUtilidad / totalVentas) * 100 : 0;
+    const ticketPromedio = cantidadVentas > 0 ? totalVentas / cantidadVentas : 0;
+
+    const desglose = {
+        pedidos: { total: 0, cantidad: 0 },
+        kilo: { total: 0, cantidad: 0 },
+        saco: { total: 0, cantidad: 0 },
+    };
+
+    const conteoProd: Record<number, { nombre: string; emoji: string; totalBruto: number; cantidad: number }> = {};
+
+    ventasMes.forEach((v) => {
+        const esPedido = db.pedidos.some((p) => p.id_venta === v.id_venta);
+        if (esPedido) {
+            desglose.pedidos.total += v.total_venta;
+            desglose.pedidos.cantidad++;
+        }
+
+        db.detalle_venta
+            .filter((dt) => dt.id_venta === v.id_venta)
+            .forEach((dt) => {
+                const prod = getProducto(dt.id_producto);
+                if (!prod) return;
+
+                if (prod.venta_a_granel) {
+                    desglose.kilo.total += dt.subtotal;
+                    desglose.kilo.cantidad++;
+                } else if (prod.id_producto_suelto) {
+                    desglose.saco.total += dt.subtotal;
+                    desglose.saco.cantidad++;
+                }
+
+                if (!conteoProd[dt.id_producto]) {
+                    conteoProd[dt.id_producto] = { nombre: prod.nombre, emoji: prod.emoji, totalBruto: 0, cantidad: 0 };
+                }
+                conteoProd[dt.id_producto].totalBruto += dt.subtotal;
+                conteoProd[dt.id_producto].cantidad += dt.cantidad;
             });
     });
 
-    const topProductoArray = Object.values(conteo).sort((a, b) => b.totalBruto - a.totalBruto);
-    const topProducto = topProductoArray.length > 0 ? topProductoArray[0] : undefined;
+    const topProducto = Object.values(conteoProd).sort((a, b) => b.totalBruto - a.totalBruto)[0];
 
-    return { totalVentas, totalCosto, totalUtilidad, cantidadVentas, margenPromedio, ticketPromedio, topProducto };
+    return {
+        totalVentas,
+        totalCosto,
+        totalUtilidad,
+        cantidadVentas,
+        margenPromedio,
+        ticketPromedio,
+        desglose,
+        topProducto,
+    };
+}
+
+// ── 14. LÓGICA DE SACOS ──────────────────────────────────────
+export function abrirSaco(idSaco: number): { ok: boolean; error?: string } {
+    const saco = getProducto(idSaco);
+    if (!saco) return { ok: false, error: 'Saco no encontrado' };
+    if (!saco.id_producto_suelto || !saco.kilos_por_saco) 
+        return { ok: false, error: 'Este producto no es un saco vinculable' };
+    if (saco.stock_actual < 1) 
+        return { ok: false, error: 'No hay stock de este saco' };
+
+    const suelto = getProducto(saco.id_producto_suelto);
+    if (!suelto) return { ok: false, error: 'Producto suelto vinculado no encontrado' };
+
+    // Proceso: Restar 1 saco, Sumar kilos al suelto
+    saco.stock_actual -= 1;
+    suelto.stock_actual += saco.kilos_por_saco;
+
+    const now = new Date().toISOString();
+    
+    // Movimiento salida saco
+    db.movimientos_stock.push({
+        id_movimiento: nextId(db.movimientos_stock),
+        id_producto: saco.id,
+        tipo: TipoMovimiento.Salida,
+        cantidad: 1,
+        fecha: now,
+        nota: `Apertura de saco -> ${suelto.nombre}`
+    });
+
+    // Movimiento entrada suelto
+    db.movimientos_stock.push({
+        id_movimiento: nextId(db.movimientos_stock),
+        id_producto: suelto.id,
+        tipo: TipoMovimiento.Entrada,
+        cantidad: saco.kilos_por_saco,
+        fecha: now,
+        nota: `Carga desde saco #${saco.id}`
+    });
+
+    return { ok: true };
 }
 
 // ── 14. FACTURAS ─────────────────────────────────────────────
@@ -347,7 +654,6 @@ export function getFacturas(): Factura[] {
 }
 
 // ── 15. CLIENTES (CRM) ────────────────────────────────────────
-
 export function crearCliente(data: Omit<Cliente, 'id' | 'total_compras' | 'fecha_registro'>): Cliente {
     const id = nextId(db.clientes as any);
     const cliente: Cliente = {
@@ -376,7 +682,6 @@ export function getClienteByPhone(phone: string): Cliente | undefined {
 }
 
 // ── 16. PEDIDOS (DELIVERY) ────────────────────────────────────
-
 export function crearPedido(data: Omit<Pedido, 'id' | 'fecha_creacion'>): Pedido {
     const id = nextId(db.pedidos as any);
     
@@ -444,7 +749,12 @@ export function actualizarEstadoPedido(id: number, estado: EstadoPedido): boolea
     return true;
 }
 
-// (Exporting interfaces to make tests happy. The interfaces are already exported defined at the top of the file.)
+export function editarPedido(id: number, data: { nota_delivery?: string; metodo_pago?: MetodoPago }): boolean {
+    const p = db.pedidos.find((x) => x.id === id);
+    if (!p) return false;
+    Object.assign(p, data);
+    return true;
+}
 
 export function getPedidos(): Pedido[] {
     return db.pedidos.slice().reverse(); // Show most recent first
