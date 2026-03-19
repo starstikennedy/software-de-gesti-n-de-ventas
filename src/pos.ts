@@ -169,6 +169,11 @@ export function seedData(): void {
         { id: 12, nombre: 'Arena Sanitaria 5L', sku: 'AR-5L', precio_venta: 5500, precio_costo: 3200, stock_actual: 0, stock_minimo: 4, categoria: 'Higiene', especie: 'Gato', emoji: '🧹', peso_kg: 5 },
         { id: 13, nombre: 'Shampoo Medicado 250ml', sku: 'SH-MED', precio_venta: 6200, precio_costo: 3800, stock_actual: 9, stock_minimo: 3, categoria: 'Higiene', especie: 'Perro', emoji: '🛁' },
     ];
+    // Facturas iniciales para sugerencias
+    db.facturas = [
+        { id: 1, numero: 'FAC-001', tipo: 'Compra', proveedor_cliente: 'Royal Canin S.A.', descripcion: 'Compra mensual', monto_total: 150000, fecha_emision: '2024-03-01', fecha_vencimiento: '2024-03-15', estado: EstadoFactura.Pagada },
+        { id: 2, numero: 'FAC-002', tipo: 'Compra', proveedor_cliente: 'Purina Latam', descripcion: 'Suministro snacks', monto_total: 85000, fecha_emision: '2024-03-05', fecha_vencimiento: '2024-03-20', estado: EstadoFactura.PorPagar },
+    ];
 }
 
 // Helper: obtener todas las especies únicas del catálogo

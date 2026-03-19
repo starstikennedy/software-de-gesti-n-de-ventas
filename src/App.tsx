@@ -11,14 +11,73 @@ import {
 type Tab = 'pos' | 'inventory' | 'ordenes' | 'pedidos' | 'clientes' | 'report' | 'weekly' | 'informes' | 'facturas';
 type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: number; msg: string; type: ToastType; }
+interface User { email: string; name: string; }
 
 // ── Inicializar datos ─────────────────────────────────
 seedData();
 
 // ═══════════════════════════════════════════════════════
+// COMPONENTES DE APOYO
+// ═══════════════════════════════════════════════════════
+
+function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!email || !password) return;
+        // Simulación: cualquier login es válido
+        const user = { email, name: email.split('@')[0] };
+        localStorage.setItem('pos_user', JSON.stringify(user));
+        onLogin(user);
+    };
+
+    return (
+        <div className="login-container">
+            <div className="login-card">
+                <div className="login-header">
+                    <div className="login-logo">🐾 FJ Mascotas</div>
+                    <div className="login-subtitle">Sistema de Gestión de Ventas</div>
+                </div>
+                <form className="login-form" onSubmit={handleSubmit}>
+                    <div className="form-group">
+                        <label className="form-label">Email / Gmail</label>
+                        <input 
+                            type="email" 
+                            className="form-input" 
+                            placeholder="ejemplo@gmail.com" 
+                            value={email} 
+                            onChange={(e) => setEmail(e.target.value)}
+                            required 
+                        />
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">Contraseña</label>
+                        <input 
+                            type="password" 
+                            className="form-input" 
+                            placeholder="••••••••" 
+                            value={password} 
+                            onChange={(e) => setPassword(e.target.value)}
+                            required 
+                        />
+                    </div>
+                    <button type="submit" className="btn-login">Iniciar Sesión</button>
+                </form>
+            </div>
+        </div>
+    );
+}
+
+// ═══════════════════════════════════════════════════════
 // APP
 // ═══════════════════════════════════════════════════════
 export default function App() {
+    const [currentUser, setCurrentUser] = useState<User | null>(() => {
+        const saved = localStorage.getItem('pos_user');
+        return saved ? JSON.parse(saved) : null;
+    });
     const [tab, setTab] = useState<Tab>('pos');
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [showSuccess, setShowSuccess] = useState(false);
@@ -39,6 +98,15 @@ export default function App() {
 
     const now = new Date();
     const dateStr = now.toLocaleDateString('es-AR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+    const handleLogout = () => {
+        localStorage.removeItem('pos_user');
+        setCurrentUser(null);
+    };
+
+    if (!currentUser) {
+        return <LoginScreen onLogin={setCurrentUser} />;
+    }
 
     return (
         <>
@@ -68,6 +136,13 @@ export default function App() {
                     ))}
                 </div>
                 <div className="topbar-right">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.03)', padding: '4px 12px', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent)' }}>{currentUser.name}</span>
+                            <span style={{ fontSize: '0.65rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sesión iniciada</span>
+                        </div>
+                        <button className="btn-logout" style={{ padding: '6px 10px', fontSize: '0.75rem' }} onClick={handleLogout}>Cerrar Sesión</button>
+                    </div>
                     <div className="date-badge">{dateStr}</div>
                 </div>
             </div>
@@ -1535,7 +1610,30 @@ function FacturaModal({ editItem, onClose, addToast, onSave }: {
                     </div>
                     <div className="form-group">
                         <div className="form-label">Proveedor / Cliente *</div>
-                        <input className="form-input" placeholder="Ej: Royal Canin S.A." value={form.proveedor_cliente} onChange={set('proveedor_cliente')} />
+                        <input 
+                            className="form-input" 
+                            placeholder="Ej: Royal Canin S.A." 
+                            value={form.proveedor_cliente} 
+                            onChange={set('proveedor_cliente')} 
+                        />
+                        {/* Sugerencias rápidas */}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
+                            {Array.from(new Set(getFacturas().map(f => f.proveedor_cliente)))
+                                .reverse() // Más recientes primero
+                                .slice(0, 5) // Top 5
+                                .map(name => (
+                                    <button 
+                                        key={name} 
+                                        type="button"
+                                        className="pill" 
+                                        style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                                        onClick={() => setForm(f => ({ ...f, proveedor_cliente: name }))}
+                                    >
+                                        {name}
+                                    </button>
+                                ))
+                            }
+                        </div>
                     </div>
                     <div className="form-group">
                         <div className="form-label">Descripción</div>
