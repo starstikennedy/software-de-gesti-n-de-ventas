@@ -9,6 +9,15 @@
   overflow: hidden;
 }
 
+@media (max-width: 900px) {
+  .pos-layout {
+    flex-direction: column;
+    overflow-y: auto;
+    height: auto;
+    flex: none;
+  }
+}
+
 .pos-left {
   flex: 1;
   display: flex;
@@ -19,8 +28,40 @@
   overflow: hidden;
 }
 
+@media (max-width: 900px) {
+  .pos-left {
+    border-right: none;
+    border-bottom: 2px solid var(--border);
+    overflow: visible;
+    flex-shrink: 0;
+  }
+}
 
 
+
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    flex-wrap: wrap;
+    padding: 12px;
+  }
+  
+  .topbar-left {
+    width: 100%;
+    justify-content: center;
+    margin-bottom: 8px;
+  }
+}
 
 .search-bar {
   display: flex;
@@ -168,6 +209,14 @@
   background: var(--surface);
   padding: 20px;
   gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .pos-right {
+    width: 100%;
+    border-top: 1px solid var(--border);
+    background: var(--surface2);
+  }
 }
 
 .cart-header {
@@ -488,14 +537,16 @@
 
 .table-wrap {
   flex: 1;
-  overflow-y: auto;
+  overflow-x: auto;
   border-radius: 12px;
   border: 1px solid var(--border);
+  -webkit-overflow-scrolling: touch;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
+  min-width: 600px; /* Asegura que la tabla sea legible con scroll */
 }
 
 thead th {
@@ -1211,6 +1262,14 @@ select.form-input option {
 }
 .btn-xs.btn-danger:hover {
   background: rgba(248, 113, 113, 0.1);
+}
+
+.btn-xs.btn-warn {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.4);
+}
+.btn-xs.btn-warn:hover {
+  background: rgba(251, 191, 36, 0.1);
 }
 
 /* Empty state */

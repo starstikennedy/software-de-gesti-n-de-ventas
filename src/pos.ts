@@ -77,7 +77,21 @@ export enum EstadoFactura {
     Anulada = 'Anulada',
 }
 
-export type TipoFactura = 'Compra' | 'Venta';
+export type TipoFactura = 'Compra';
+
+export interface ItemFactura {
+    id: number;            // id local dentro de la factura
+    concepto: string;      // nombre del producto / servicio
+    cantidad: number;
+    precio_unitario: number;
+}
+
+export interface LogFactura {
+    accion: string;
+    fecha: string;
+    detalle?: string;
+    usuario?: string;
+}
 
 export interface Factura {
     id: number;
@@ -91,10 +105,12 @@ export interface Factura {
     estado: EstadoFactura;
     notas?: string;
     imagen_url?: string;    // base64 data URL de la foto de la factura
-    responsable_subida?: string;  // quién subió la factura al sistema
-    responsable_pago?: string;    // quién es responsable de pagar
-    metodo_pago_final?: string;   // Efectivo / Transferencia / Depósito / Tarjeta
+    responsable_subida?: string;
+    responsable_pago?: string;
+    metodo_pago_final?: string;   // Efectivo / Transferencia / Tarjeta
     fecha_pago?: string;          // ISO date string de cuándo se pagó
+    items?: ItemFactura[];         // líneas de detalle de la factura
+    historial?: LogFactura[];      // log de auditoría
 }
 
 export interface Cliente {
@@ -372,9 +388,9 @@ export const getHistorialProducto = (id: number): MovimientoStock[] =>
 
 // ── 11. UTILIDAD DE FORMATO ──────────────────────────────────
 export function fmtMoney(n: number): string {
-    return new Intl.NumberFormat('es-AR', {
+    return new Intl.NumberFormat('es-CL', {
         style: 'currency',
-        currency: 'ARS',
+        currency: 'CLP',
         minimumFractionDigits: 0,
     }).format(n);
 }
@@ -604,44 +620,74 @@ export function abrirSaco(idSaco: number): { ok: boolean; error?: string } {
 
 // ── 14. FACTURAS ─────────────────────────────────────────────
 
-export function agregarFactura(data: Omit<Factura, 'id'>): Factura {
+export function agregarFactura(data: Omit<Factura, 'id'>, usuario?: string): Factura {
     const id = db.facturas.length ? Math.max(...db.facturas.map((f) => f.id)) + 1 : 1;
-    const factura: Factura = { id, ...data };
+    const factura: Factura = {
+        id,
+        ...data,
+        historial: [
+            { accion: 'Factura creada', fecha: new Date().toISOString(), usuario },
+            ...(data.historial ?? []),
+        ],
+    };
     db.facturas.push(factura);
     return factura;
 }
 
-export function actualizarEstadoFactura(id: number, estado: EstadoFactura): boolean {
+export function actualizarEstadoFactura(id: number, estado: EstadoFactura, usuario?: string): boolean {
     const f = db.facturas.find((f) => f.id === id);
     if (!f) return false;
     f.estado = estado;
+    const accionMap: Record<EstadoFactura, string> = {
+        [EstadoFactura.PorPagar]: 'Revertida a Por Pagar',
+        [EstadoFactura.Pagada]: 'Marcada como Pagada',
+        [EstadoFactura.Vencida]: 'Marcada como Vencida',
+        [EstadoFactura.Anulada]: 'Anulada',
+    };
+    if (!f.historial) f.historial = [];
+    f.historial.push({ accion: accionMap[estado] ?? estado, fecha: new Date().toISOString(), usuario });
     return true;
 }
 
-export function editarFactura(id: number, data: Partial<Omit<Factura, 'id'>>): boolean {
+export function editarFactura(id: number, data: Partial<Omit<Factura, 'id'>>, usuario?: string): boolean {
     const f = db.facturas.find((f) => f.id === id);
     if (!f) return false;
     Object.assign(f, data);
+    if (!f.historial) f.historial = [];
+    f.historial.push({ accion: 'Factura editada', fecha: new Date().toISOString(), usuario });
     return true;
 }
 
-export function pagarFactura(id: number, metodo: string, responsable: string, fecha: string): boolean {
+export function pagarFactura(id: number, metodo: string, responsable: string, fecha: string, usuario?: string): boolean {
     const f = db.facturas.find((f) => f.id === id);
     if (!f) return false;
     f.estado = EstadoFactura.Pagada;
     f.metodo_pago_final = metodo;
     f.responsable_pago = responsable;
     f.fecha_pago = fecha;
+    if (!f.historial) f.historial = [];
+    f.historial.push({ accion: 'Marcada como Pagada', fecha: new Date().toISOString(), detalle: `Método: ${metodo}`, usuario });
     return true;
 }
 
-export function cancelarPago(id: number): boolean {
+export function cancelarPago(id: number, usuario?: string): boolean {
     const f = db.facturas.find((f) => f.id === id);
     if (!f) return false;
     f.estado = EstadoFactura.PorPagar;
     f.metodo_pago_final = undefined;
     f.responsable_pago = undefined;
     f.fecha_pago = undefined;
+    if (!f.historial) f.historial = [];
+    f.historial.push({ accion: 'Pago deshecho', fecha: new Date().toISOString(), usuario });
+    return true;
+}
+
+export function reactivarFactura(id: number, usuario?: string): boolean {
+    const f = db.facturas.find((f) => f.id === id);
+    if (!f) return false;
+    f.estado = EstadoFactura.PorPagar;
+    if (!f.historial) f.historial = [];
+    f.historial.push({ accion: 'Anulación deshecha — reactivada', fecha: new Date().toISOString(), usuario });
     return true;
 }
 

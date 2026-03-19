@@ -4,7 +4,8 @@ import {
     getReporteDiario, getReporteSemanal, getReporteMensual, getProducto, getEspecies, getCategorias,
     agregarFactura, actualizarEstadoFactura, getFacturas, editarFactura, pagarFactura, cancelarPago,
     crearCliente, editarCliente, crearPedido, getPedidos, editarPedido, actualizarEstadoPedido, getClientes,
-    MetodoPago, EstadoFactura, EstadoPedido, type Producto, type ItemCarrito, type Factura, type TipoFactura, type Cliente, type Pedido
+    MetodoPago, EstadoFactura, EstadoPedido, type Producto, type ItemCarrito, type Factura, type TipoFactura, type ItemFactura, type Cliente, type Pedido,
+    reactivarFactura
 } from './pos';
 
 // ── Tipos locales ─────────────────────────────────────
@@ -23,12 +24,12 @@ seedData();
 function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [nombre, setNombre] = useState('');
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!email || !password) return;
-        // Simulación: cualquier login es válido
-        const user = { email, name: email.split('@')[0] };
+        if (!email || !password || !nombre.trim()) return;
+        const user = { email, name: nombre.trim() };
         localStorage.setItem('pos_user', JSON.stringify(user));
         onLogin(user);
     };
@@ -41,6 +42,17 @@ function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
                     <div className="login-subtitle">Sistema de Gestión de Ventas</div>
                 </div>
                 <form className="login-form" onSubmit={handleSubmit}>
+                    <div className="form-group">
+                        <label className="form-label">Nombre / Usuario *</label>
+                        <input
+                            type="text"
+                            className="form-input"
+                            placeholder="Ej: Mauri"
+                            value={nombre}
+                            onChange={(e) => setNombre(e.target.value)}
+                            required
+                        />
+                    </div>
                     <div className="form-group">
                         <label className="form-label">Email / Gmail</label>
                         <input 
@@ -163,7 +175,7 @@ export default function App() {
                 {tab === 'report' && <ReportScreen key={refresh} />}
                 {tab === 'weekly' && <WeeklyReportScreen key={refresh} />}
                 {tab === 'informes' && <InformesScreen key={refresh} />}
-                {tab === 'facturas' && <FacturasScreen key={refresh} addToast={addToast} />}
+                {tab === 'facturas' && <FacturasScreen key={refresh} addToast={addToast} userName={currentUser.name} />}
                 {tab === 'pedidos' && <PedidosScreen key={refresh} addToast={addToast} />}
                 {tab === 'clientes' && <ClientesScreen key={refresh} addToast={addToast} />}
                 {tab === 'ordenes' && <PurchaseOrderScreen key={refresh} addToast={addToast} />}
@@ -1288,13 +1300,19 @@ function WeeklyReportScreen() {
 // ═══════════════════════════════════════════════════════
 // FACTURAS SCREEN
 // ═══════════════════════════════════════════════════════
-function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => void }) {
+function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: ToastType) => void; userName: string }) {
     const [tick, setTick] = useState(0);
     const [filtroEstado, setFiltroEstado] = useState<EstadoFactura | 'Todos'>('Todos');
-    const [filtroTipo, setFiltroTipo] = useState<TipoFactura | 'Todos'>('Todos');
     const [query, setQuery] = useState('');
     const [modal, setModal] = useState<Factura | 'NUEVA' | null>(null);
     const [detalle, setDetalle] = useState<Factura | null>(null);
+    const [confirmDeshacerId, setConfirmDeshacerID] = useState<number | null>(null);
+    const [confirmAnularId, setConfirmAnularId] = useState<number | null>(null);
+    const [confirmReactivarId, setConfirmReactivarId] = useState<number | null>(null);
+    const [facturaPendientePago, setFacturaPendientePago] = useState<Factura | null>(null);
+    const [sortBy, setSortBy] = useState<'fecha_desc' | 'fecha_asc' | 'monto_desc' | 'monto_asc' | 'numero'>('fecha_desc');
+    const [montoMin, setMontoMin] = useState('');
+    const [montoMax, setMontoMax] = useState('');
 
     const refresh = () => setTick((t) => t + 1);
     const facturas = getFacturas();
@@ -1309,10 +1327,32 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
     // Lista filtrada
     const lista = facturas.filter((f) => {
         const matchEstado = filtroEstado === 'Todos' || f.estado === filtroEstado;
-        const matchTipo = filtroTipo === 'Todos' || f.tipo === filtroTipo;
         const matchQ = !query || f.numero.toLowerCase().includes(query.toLowerCase()) || f.proveedor_cliente.toLowerCase().includes(query.toLowerCase()) || f.descripcion.toLowerCase().includes(query.toLowerCase());
-        return matchEstado && matchTipo && matchQ;
-    }).sort((a, b) => b.id - a.id);
+        
+        const m = f.monto_total;
+        const min = montoMin ? parseFloat(montoMin) : -Infinity;
+        const max = montoMax ? parseFloat(montoMax) : Infinity;
+        const matchMonto = m >= min && m <= max;
+
+        return matchEstado && matchQ && matchMonto;
+    }).sort((a, b) => {
+        if (sortBy === 'fecha_desc') {
+            const da = new Date(a.fecha_emision).getTime();
+            const db2 = new Date(b.fecha_emision).getTime();
+            if (db2 !== da) return db2 - da;
+            return b.id - a.id;
+        }
+        if (sortBy === 'fecha_asc') {
+            const da = new Date(a.fecha_emision).getTime();
+            const db2 = new Date(b.fecha_emision).getTime();
+            if (da !== db2) return da - db2;
+            return a.id - b.id;
+        }
+        if (sortBy === 'monto_desc') return b.monto_total - a.monto_total;
+        if (sortBy === 'monto_asc') return a.monto_total - b.monto_total;
+        if (sortBy === 'numero') return a.numero.localeCompare(b.numero);
+        return b.id - a.id;
+    });
 
     const ESTADO_CONFIG: Record<EstadoFactura, { color: string; icon: string }> = {
         [EstadoFactura.PorPagar]: { color: 'estado-porpagar', icon: '🟡' },
@@ -1322,21 +1362,39 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
     };
 
     const handleMarcarPagada = (f: Factura) => {
-        actualizarEstadoFactura(f.id, EstadoFactura.Pagada);
-        addToast(`✅ Factura ${f.numero} marcada como Pagada`, 'success');
-        refresh();
+        setFacturaPendientePago(f);
     };
 
     const handleCancelarPago = (f: Factura) => {
-        if (!confirm(`¿Estás seguro que deseas deshacer el pago de la factura ${f.numero}?`)) return;
-        cancelarPago(f.id);
+        setConfirmDeshacerID(f.id);
+    };
+
+    const confirmarDeshacerPago = (f: Factura) => {
+        cancelarPago(f.id, userName);
         addToast(`🔄 Factura ${f.numero} revertida a Por Pagar`, 'success');
+        setConfirmDeshacerID(null);
         refresh();
     };
 
     const handleAnular = (f: Factura) => {
-        actualizarEstadoFactura(f.id, EstadoFactura.Anulada);
+        setConfirmAnularId(f.id);
+    };
+
+    const confirmarAnular = (f: Factura) => {
+        actualizarEstadoFactura(f.id, EstadoFactura.Anulada, userName);
         addToast(`🚫 Factura ${f.numero} anulada`, 'success');
+        setConfirmAnularId(null);
+        refresh();
+    };
+
+    const handleReactivar = (f: Factura) => {
+        setConfirmReactivarId(f.id);
+    };
+
+    const confirmarReactivar = (f: Factura) => {
+        reactivarFactura(f.id, userName);
+        addToast(`↩️ Factura ${f.numero} reactivada a Por Pagar`, 'success');
+        setConfirmReactivarId(null);
         refresh();
     };
 
@@ -1386,7 +1444,7 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                     { label: 'Por Pagar', value: porPagar.length, sub: fmtMoney(porPagar.reduce((s, f) => s + f.monto_total, 0)), cls: 'warning-card', color: 'var(--warn)' },
                     { label: 'Pagadas', value: pagadas.length, sub: fmtMoney(pagadas.reduce((s, f) => s + f.monto_total, 0)), cls: 'success-card', color: 'var(--success)' },
                     { label: 'Vencidas', value: vencidas.length, sub: fmtMoney(vencidas.reduce((s, f) => s + f.monto_total, 0)), cls: 'danger-card', color: 'var(--danger)' },
-                    { label: 'Pendiente Total', value: fmtMoney(montoPendiente), sub: 'por cobrar/pagar', cls: 'accent-card', color: 'var(--accent2)' },
+                    { label: 'Pendiente Total', value: fmtMoney(montoPendiente), sub: 'por pagar', cls: 'accent-card', color: 'var(--accent2)' },
                 ].map((s) => (
                     <div key={s.label} className={`summary-card ${s.cls}`} style={{ padding: '20px 16px' }}>
                         <div className="sc-label">{s.label}</div>
@@ -1398,21 +1456,54 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
 
             {/* Filtros */}
             <div className="fact-filters">
-                <div className="search-bar search-compact">
-                    <span>🔍</span>
-                    <input type="text" placeholder="Número, proveedor/cliente..." value={query} onChange={(e) => setQuery(e.target.value)} />
-                    {query && <button className="search-clear" onClick={() => setQuery('')}>✕</button>}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div className="search-bar search-compact" style={{ flex: 1, minWidth: 250, margin: 0 }}>
+                        <span>🔍</span>
+                        <input type="text" placeholder="Número, proveedor/cliente..." value={query} onChange={(e) => setQuery(e.target.value)} />
+                        {query && <button className="search-clear" onClick={() => setQuery('')}>✕</button>}
+                    </div>
+
+                    <select 
+                        className="form-input" 
+                        style={{ width: 'auto', minWidth: 220, marginBottom: 0, padding: '8px 12px', height: 42 }}
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value as any)}
+                    >
+                        <option value="fecha_desc">📅 Fecha (Reciente → Antigua)</option>
+                        <option value="fecha_asc">📅 Fecha (Antigua → Reciente)</option>
+                        <option value="monto_desc">💰 Monto (Mayor → Menor)</option>
+                        <option value="monto_asc">💰 Monto (Menor → Mayor)</option>
+                        <option value="numero">🔢 Número de Factura</option>
+                    </select>
+
+                    <div style={{ 
+                        display: 'flex', alignItems: 'center', gap: 8, 
+                        background: 'rgba(255,255,255,0.03)', padding: '0 12px', 
+                        borderRadius: 8, border: '1px solid var(--border)',
+                        height: 42
+                    }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700 }}>MONTO:</span>
+                        <input 
+                            type="number" 
+                            placeholder="Min" 
+                            style={{ width: 70, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', color: 'var(--fg)', fontSize: '0.85rem', outline: 'none' }}
+                            value={montoMin} 
+                            onChange={(e) => setMontoMin(e.target.value)} 
+                        />
+                        <span style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>~</span>
+                        <input 
+                            type="number" 
+                            placeholder="Max" 
+                            style={{ width: 70, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', color: 'var(--fg)', fontSize: '0.85rem', outline: 'none' }}
+                            value={montoMax} 
+                            onChange={(e) => setMontoMax(e.target.value)} 
+                        />
+                    </div>
                 </div>
+
                 <div className="category-pills">
                     {(['Todos', EstadoFactura.PorPagar, EstadoFactura.Pagada, EstadoFactura.Vencida, EstadoFactura.Anulada] as const).map((e) => (
                         <button key={e} className={`pill${filtroEstado === e ? ' active' : ''}`} onClick={() => setFiltroEstado(e)}>{e}</button>
-                    ))}
-                </div>
-                <div className="category-pills">
-                    {(['Todos', 'Compra', 'Venta'] as const).map((t) => (
-                        <button key={t} className={`pill${filtroTipo === t ? ' active' : ''}`} onClick={() => setFiltroTipo(t as any)}>
-                            {t === 'Todos' ? '📋 Todos' : t === 'Compra' ? '🛒 Compra' : '💰 Venta'}
-                        </button>
                     ))}
                 </div>
             </div>
@@ -1426,8 +1517,7 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                         <thead>
                             <tr>
                                 <th>Número</th>
-                                <th>Tipo</th>
-                                <th>Proveedor / Cliente</th>
+                                <th>Proveedor</th>
                                 <th>Descripción</th>
                                 <th>Monto</th>
                                 <th>Emisión</th>
@@ -1440,11 +1530,6 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                             {lista.map((f) => (
                                 <tr key={f.id}>
                                     <td><strong>{f.numero}</strong>{f.imagen_url && <span className="img-badge" title="Tiene foto adjunta"> 📎</span>}</td>
-                                    <td>
-                                        <span className={`tipo-badge ${f.tipo === 'Compra' ? 'tipo-compra' : 'tipo-venta'}`}>
-                                            {f.tipo === 'Compra' ? '🛒' : '💰'} {f.tipo}
-                                        </span>
-                                    </td>
                                     <td>{f.proveedor_cliente}</td>
                                     <td style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>{f.descripcion}</td>
                                     <td><strong>{fmtMoney(f.monto_total)}</strong></td>
@@ -1464,10 +1549,37 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                                                 <button className="btn-xs btn-ok" onClick={() => handleMarcarPagada(f)}>✅ Pagada</button>
                                             )}
                                             {f.estado === EstadoFactura.Pagada && (
-                                                <button className="btn-xs btn-warn" onClick={() => handleCancelarPago(f)}>🔄 Deshacer Pago</button>
+                                                confirmDeshacerId === f.id ? (
+                                                    <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                        <span style={{ fontSize: '0.75rem', color: 'var(--warn)', marginRight: 2 }}>¿Deshacer?</span>
+                                                        <button className="btn-xs btn-danger" onClick={() => confirmarDeshacerPago(f)}>Sí</button>
+                                                        <button className="btn-xs" onClick={() => setConfirmDeshacerID(null)}>No</button>
+                                                    </span>
+                                                ) : (
+                                                    <button className="btn-xs btn-warn" onClick={() => handleCancelarPago(f)}>🔄 Deshacer Pago</button>
+                                                )
                                             )}
                                             {f.estado !== EstadoFactura.Anulada && f.estado !== EstadoFactura.Pagada && (
-                                                <button className="btn-xs btn-danger" onClick={() => handleAnular(f)}>🚫 Anular</button>
+                                                confirmAnularId === f.id ? (
+                                                    <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                        <span style={{ fontSize: '0.75rem', color: 'var(--danger)', marginRight: 2 }}>¿Anular?</span>
+                                                        <button className="btn-xs btn-danger" onClick={() => confirmarAnular(f)}>Sí</button>
+                                                        <button className="btn-xs" onClick={() => setConfirmAnularId(null)}>No</button>
+                                                    </span>
+                                                ) : (
+                                                    <button className="btn-xs btn-danger" onClick={() => handleAnular(f)}>🚫 Anular</button>
+                                                )
+                                            )}
+                                            {f.estado === EstadoFactura.Anulada && (
+                                                confirmReactivarId === f.id ? (
+                                                    <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                        <span style={{ fontSize: '0.75rem', color: 'var(--accent2)', marginRight: 2 }}>¿Reactivar?</span>
+                                                        <button className="btn-xs btn-ok" onClick={() => confirmarReactivar(f)}>Sí</button>
+                                                        <button className="btn-xs" onClick={() => setConfirmReactivarId(null)}>No</button>
+                                                    </span>
+                                                ) : (
+                                                    <button className="btn-xs" style={{ color: 'var(--accent2)', borderColor: 'rgba(129,140,248,0.4)' }} onClick={() => handleReactivar(f)}>↩️ Reactivar</button>
+                                                )
                                             )}
                                             <button className="btn-xs" onClick={() => setModal(f)}>✏️ Editar</button>
                                             <button className="btn-xs" onClick={() => setDetalle(f)}>👁 Ver</button>
@@ -1480,8 +1592,22 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                 )}
             </div>
 
+            {/* Modal Método de Pago */}
+            {facturaPendientePago && (
+                <PagoModal
+                    factura={facturaPendientePago}
+                    onClose={() => setFacturaPendientePago(null)}
+                    onConfirm={(metodo) => {
+                        pagarFactura(facturaPendientePago.id, metodo, '', new Date().toISOString(), userName);
+                        addToast(`✅ Factura ${facturaPendientePago.numero} pagada con ${metodo}`, 'success');
+                        setFacturaPendientePago(null);
+                        refresh();
+                    }}
+                />
+            )}
+
             {/* Modal Factura (Nueva / Editar) */}
-            {modal && <FacturaModal editItem={modal === 'NUEVA' ? undefined : modal} onClose={() => setModal(null)} addToast={addToast} onSave={refresh} />}
+            {modal && <FacturaModal editItem={modal === 'NUEVA' ? undefined : modal} onClose={() => setModal(null)} addToast={addToast} onSave={refresh} userName={userName} />}
 
             {/* Modal Detalle */}
             {detalle && (
@@ -1491,8 +1617,7 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                         <div className="modal-body">
                             <div className="detalle-grid">
                                 <div className="detalle-item"><span>Número</span><strong>{detalle.numero}</strong></div>
-                                <div className="detalle-item"><span>Tipo</span><strong>{detalle.tipo}</strong></div>
-                                <div className="detalle-item"><span>Proveedor / Cliente</span><strong>{detalle.proveedor_cliente}</strong></div>
+                                <div className="detalle-item"><span>Proveedor</span><strong>{detalle.proveedor_cliente}</strong></div>
                                 <div className="detalle-item"><span>Descripción</span><strong>{detalle.descripcion}</strong></div>
                                 <div className="detalle-item"><span>Monto Total</span><strong style={{ color: 'var(--accent)' }}>{fmtMoney(detalle.monto_total)}</strong></div>
                                 <div className="detalle-item"><span>Fecha Emisión</span><strong>{fmtDate(detalle.fecha_emision)}</strong></div>
@@ -1500,7 +1625,47 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                                 <div className="detalle-item"><span>Estado</span>
                                     <span className={`estado-badge ${ESTADO_CONFIG[detalle.estado].color}`}>{ESTADO_CONFIG[detalle.estado].icon} {detalle.estado}</span>
                                 </div>
+                                {detalle.metodo_pago_final && (
+                                    <div className="detalle-item">
+                                        <span>Método de Pago</span>
+                                        <strong>
+                                            {detalle.metodo_pago_final === 'Efectivo' ? '💵' : detalle.metodo_pago_final === 'Transferencia' ? '🏦' : '💳'} {detalle.metodo_pago_final}
+                                        </strong>
+                                    </div>
+                                )}
+                                {detalle.fecha_pago && (
+                                    <div className="detalle-item">
+                                        <span>Fecha de Pago</span>
+                                        <strong>{fmtDate(detalle.fecha_pago)}</strong>
+                                    </div>
+                                )}
                                 {detalle.notas && <div className="detalle-item full"><span>Notas</span><strong>{detalle.notas}</strong></div>}
+                                {/* Ítems de la factura */}
+                                {detalle.items && detalle.items.length > 0 && (
+                                    <div className="detalle-item full" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+                                        <span>📦 Ítems</span>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                            <thead>
+                                                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                                    <th style={{ textAlign: 'left', padding: '4px 6px', color: 'var(--muted)' }}>Concepto</th>
+                                                    <th style={{ textAlign: 'right', padding: '4px 6px', color: 'var(--muted)' }}>Cant.</th>
+                                                    <th style={{ textAlign: 'right', padding: '4px 6px', color: 'var(--muted)' }}>P. Unit.</th>
+                                                    <th style={{ textAlign: 'right', padding: '4px 6px', color: 'var(--muted)' }}>Subtotal</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {detalle.items.map(it => (
+                                                    <tr key={it.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                        <td style={{ padding: '4px 6px' }}>{it.concepto}</td>
+                                                        <td style={{ padding: '4px 6px', textAlign: 'right' }}>{it.cantidad}</td>
+                                                        <td style={{ padding: '4px 6px', textAlign: 'right' }}>{fmtMoney(it.precio_unitario)}</td>
+                                                        <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 600 }}>{fmtMoney(it.cantidad * it.precio_unitario)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
                                 {detalle.imagen_url && (
                                     <div className="detalle-item full">
                                         <span>📎 Foto adjunta</span>
@@ -1508,6 +1673,37 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
                                             <img src={detalle.imagen_url} alt="Factura" className="img-detalle" />
                                             <span className="img-view-hint">Clic para ver en tamaño completo</span>
                                         </a>
+                                    </div>
+                                )}
+                                {/* 📝 Historial de cambios */}
+                                {detalle.historial && detalle.historial.length > 0 && (
+                                    <div className="detalle-item full" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+                                        <span>📋 Historial de Cambios</span>
+                                        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            {[...detalle.historial].reverse().map((log, i) => {
+                                                const d = new Date(log.fecha);
+                                                const dateStr = d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                                                const timeStr = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+                                                return (
+                                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: '0.82rem', gap: 8 }}>
+                                                        <span style={{ color: 'var(--fg)', flex: 1 }}>
+                                                            <span style={{ marginRight: 6 }}>
+                                                                {log.accion.includes('creada') ? '📄' : log.accion.includes('Pagada') ? '✅' : log.accion.includes('Anulada') || log.accion.includes('Anulación') ? '🚫' : log.accion.includes('deshecho') ? '🔄' : log.accion.includes('reactivada') ? '↩️' : '✏️'}
+                                                            </span>
+                                                            {log.accion}{log.detalle ? ` — ${log.detalle}` : ''}
+                                                        </span>
+                                                        <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                                                            {log.usuario && (
+                                                                <span style={{ background: 'rgba(129,140,248,0.15)', color: 'var(--accent2)', border: '1px solid rgba(129,140,248,0.25)', padding: '1px 7px', borderRadius: 10, fontSize: '0.75rem', fontWeight: 600 }}>
+                                                                    👤 {log.usuario}
+                                                                </span>
+                                                            )}
+                                                            <span style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>{dateStr} {timeStr}</span>
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -1522,17 +1718,63 @@ function FacturasScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
     );
 }
 
+// ── Modal Método de Pago ────────────────────────────────────────
+function PagoModal({ factura, onClose, onConfirm }: {
+    factura: Factura;
+    onClose: () => void;
+    onConfirm: (metodo: string) => void;
+}) {
+    const metodos: { label: string; icon: string; value: string }[] = [
+        { label: 'Efectivo', icon: '💵', value: 'Efectivo' },
+        { label: 'Transferencia', icon: '🏦', value: 'Transferencia' },
+        { label: 'Tarjeta', icon: '💳', value: 'Tarjeta' },
+    ];
+    return (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+            <div className="modal" style={{ width: 420 }}>
+                <div className="modal-title">✅ Registrar Pago</div>
+                <div className="modal-body" style={{ textAlign: 'center' }}>
+                    <div style={{ marginBottom: 8, color: 'var(--muted)', fontSize: '0.9rem' }}>Factura <strong>{factura.numero}</strong> — {fmtMoney(factura.monto_total)}</div>
+                    <div style={{ marginBottom: 20, color: 'var(--muted)', fontSize: '0.85rem' }}>Seleccioná el método de pago:</div>
+                    <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                        {metodos.map(m => (
+                            <button
+                                key={m.value}
+                                onClick={() => onConfirm(m.value)}
+                                style={{
+                                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+                                    padding: '18px 24px', border: '2px solid var(--border)', borderRadius: 12,
+                                    background: 'var(--surface)', cursor: 'pointer', transition: 'all 0.15s',
+                                    color: 'var(--fg)', fontSize: '0.9rem', fontWeight: 600,
+                                }}
+                                onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--accent)', e.currentTarget.style.background = 'rgba(99,102,241,0.12)')}
+                                onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)', e.currentTarget.style.background = 'var(--surface)')}
+                            >
+                                <span style={{ fontSize: '2rem' }}>{m.icon}</span>
+                                <span>{m.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="modal-actions">
+                    <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ── Modal Factura (Nueva / Editar) ───────────────────────
-function FacturaModal({ editItem, onClose, addToast, onSave }: {
+function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
     editItem?: Factura;
     onClose: () => void;
     addToast: (m: string, t: ToastType) => void;
     onSave: () => void;
+    userName: string;
 }) {
     const today = new Date().toISOString().split('T')[0];
     const [form, setForm] = useState({
         numero: editItem?.numero || '', 
-        tipo: editItem?.tipo || 'Compra' as TipoFactura,
         proveedor_cliente: editItem?.proveedor_cliente || '', 
         descripcion: editItem?.descripcion || '',
         monto_total: editItem ? editItem.monto_total.toString() : '', 
@@ -1540,8 +1782,28 @@ function FacturaModal({ editItem, onClose, addToast, onSave }: {
         fecha_vencimiento: editItem?.fecha_vencimiento || '', 
         notas: editItem?.notas || '',
     });
+    const [items, setItems] = useState<ItemFactura[]>(
+        editItem?.items?.length ? editItem.items : []
+    );
     const [imagenPreview, setImagenPreview] = useState<string | null>(editItem?.imagen_url || null);
     const fileInputRef = React.useRef<HTMLInputElement>(null);
+    const [excludedProviders, setExcludedProviders] = useState<string[]>(() => {
+        const saved = localStorage.getItem('pos_excluded_providers');
+        return saved ? JSON.parse(saved) : [];
+    });
+
+    const handleExcludeProvider = (name: string) => {
+        const updated = [...excludedProviders, name];
+        setExcludedProviders(updated);
+        localStorage.setItem('pos_excluded_providers', JSON.stringify(updated));
+        addToast(`✅ Sugerencia "${name}" oculta`, 'success');
+    };
+
+    // Sugerencias de productos (basado en inventario y facturas previas)
+    const productSuggestions = Array.from(new Set([
+        ...db.productos.map((p: Producto) => p.nombre),
+        ...getFacturas().flatMap((f: Factura) => f.items?.map((it: ItemFactura) => it.concepto) || [])
+    ])).slice(0, 8);
 
     const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
         setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -1559,31 +1821,40 @@ function FacturaModal({ editItem, onClose, addToast, onSave }: {
         reader.readAsDataURL(file);
     };
 
+    // Total calculado desde ítems (o manual si no hay ítems)
+    const totalDesdeItems = items.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
+    const tieneItems = items.length > 0;
+
+    const addItem = () => setItems(prev => [...prev, { id: Date.now(), concepto: '', cantidad: 1, precio_unitario: 0 }]);
+    const removeItem = (id: number) => setItems(prev => prev.filter(it => it.id !== id));
+    const updateItem = (id: number, field: keyof ItemFactura, value: string | number) =>
+        setItems(prev => prev.map(it => it.id === id ? { ...it, [field]: typeof value === 'string' ? value : Number(value) } : it));
+
     const save = () => {
         if (!form.proveedor_cliente.trim()) { addToast('⚠️ Ingresar proveedor/cliente', 'error'); return; }
-        if (!form.monto_total || parseFloat(form.monto_total) <= 0) { addToast('⚠️ Monto inválido', 'error'); return; }
+        if (!tieneItems && (!form.monto_total || parseFloat(form.monto_total) <= 0)) { addToast('⚠️ Agregá ítems o ingresá un monto', 'error'); return; }
         if (!form.fecha_vencimiento) { addToast('⚠️ Ingresar fecha de vencimiento', 'error'); return; }
-        
+        if (tieneItems && items.some(it => !it.concepto.trim())) { addToast('⚠️ Todos los ítems deben tener un concepto', 'error'); return; }
+
+        const montoFinal = tieneItems ? totalDesdeItems : parseFloat(form.monto_total);
         const data = {
             numero: form.numero.trim() || numAuto,
-            tipo: form.tipo,
+            tipo: 'Compra' as TipoFactura,
             proveedor_cliente: form.proveedor_cliente.trim(),
             descripcion: form.descripcion.trim(),
-            monto_total: parseFloat(form.monto_total),
+            monto_total: montoFinal,
             fecha_emision: form.fecha_emision,
             fecha_vencimiento: form.fecha_vencimiento,
             notas: form.notas.trim() || undefined,
             imagen_url: imagenPreview ?? undefined,
+            items: tieneItems ? items : undefined,
         };
 
         if (editItem) {
-            editarFactura(editItem.id, data);
+            editarFactura(editItem.id, data, userName);
             addToast(`✅ Factura ${data.numero} actualizada`, 'success');
         } else {
-            agregarFactura({
-                ...data,
-                estado: EstadoFactura.PorPagar,
-            });
+            agregarFactura({ ...data, estado: EstadoFactura.PorPagar }, userName);
             addToast(`✅ Factura ${data.numero} registrada`, 'success');
         }
         onSave();
@@ -1595,18 +1866,9 @@ function FacturaModal({ editItem, onClose, addToast, onSave }: {
             <div className="modal" style={{ width: 580 }}>
                 <div className="modal-title">🧾 {editItem ? 'Editar Factura' : 'Nueva Factura'}</div>
                 <div className="modal-body">
-                    <div className="form-row">
-                        <div className="form-group">
-                            <div className="form-label">Número de Factura</div>
-                            <input className="form-input" placeholder={numAuto} value={form.numero} onChange={set('numero')} />
-                        </div>
-                        <div className="form-group">
-                            <div className="form-label">Tipo *</div>
-                            <select className="form-input" value={form.tipo} onChange={set('tipo')}>
-                                <option value="Compra">🛒 Compra (a proveedor)</option>
-                                <option value="Venta">💰 Venta (a cliente)</option>
-                            </select>
-                        </div>
+                    <div className="form-group">
+                        <div className="form-label">Número de Factura</div>
+                        <input className="form-input" placeholder={numAuto} value={form.numero} onChange={set('numero')} />
                     </div>
                     <div className="form-group">
                         <div className="form-label">Proveedor / Cliente *</div>
@@ -1619,6 +1881,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave }: {
                         {/* Sugerencias rápidas */}
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
                             {Array.from(new Set(getFacturas().map(f => f.proveedor_cliente)))
+                                .filter(name => !excludedProviders.includes(name))
                                 .reverse() // Más recientes primero
                                 .slice(0, 5) // Top 5
                                 .map(name => (
@@ -1626,23 +1889,151 @@ function FacturaModal({ editItem, onClose, addToast, onSave }: {
                                         key={name} 
                                         type="button"
                                         className="pill" 
-                                        style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                                        style={{ fontSize: '0.75rem', padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 6 }}
                                         onClick={() => setForm(f => ({ ...f, proveedor_cliente: name }))}
                                     >
-                                        {name}
+                                        <span>{name}</span>
+                                        <span 
+                                            onClick={(e) => { e.stopPropagation(); handleExcludeProvider(name); }}
+                                            style={{ color: 'var(--muted)', cursor: 'pointer', fontSize: '0.9rem', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }}
+                                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--danger)', e.currentTarget.style.color = 'white')}
+                                            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)', e.currentTarget.style.color = 'var(--muted)')}
+                                        >✕</span>
                                     </button>
                                 ))
                             }
                         </div>
                     </div>
                     <div className="form-group">
-                        <div className="form-label">Descripción</div>
+                        <div className="form-label">Descripción general (opcional)</div>
                         <input className="form-input" placeholder="Ej: Compra de alimentos mes de marzo" value={form.descripcion} onChange={set('descripcion')} />
                     </div>
+
+                    {/* ── Tabla de Ítems ── */}
                     <div className="form-group">
-                        <div className="form-label">Monto Total *</div>
-                        <input className="form-input" type="number" min="0" step="0.01" placeholder="0" value={form.monto_total} onChange={set('monto_total')} />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <div className="form-label" style={{ margin: 0 }}>📦 Ítems de la factura</div>
+                            <button type="button" className="btn-accent-sm" onClick={addItem}>➕ Agregar ítem</button>
+                        </div>
+                        
+                        {/* Sugerencias de PRODUCTOS rápidas */}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--muted)', alignSelf: 'center', marginRight: 4 }}>Sugerencias:</span>
+                                    {productSuggestions.map((p: string) => (
+                                        <button 
+                                            key={p} type="button" className="pill" 
+                                            style={{ fontSize: '0.7rem', padding: '1px 6px', background: 'rgba(255,255,255,0.03)' }}
+                                            onClick={() => {
+                                                const existe = db.productos.find((pr: Producto) => pr.nombre === p);
+                                                const newItem: ItemFactura = { 
+                                                    id: Date.now() + Math.random(), 
+                                                    concepto: p, 
+                                                    cantidad: 1, 
+                                                    precio_unitario: existe ? existe.precio_costo : 0 
+                                                };
+                                                setItems(prev => [...prev, newItem]);
+                                            }}
+                                        >
+                                            {p}
+                                        </button>
+                                    ))}
+                        </div>
+                        {items.length === 0 ? (
+                            <div style={{ padding: '12px', background: 'var(--surface)', borderRadius: 8, border: '1px dashed var(--border)', textAlign: 'center', color: 'var(--muted)', fontSize: '0.85rem' }}>
+                                Sin ítems — podés ingresar el monto total manualmente abajo
+                            </div>
+                        ) : (
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                <thead>
+                                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <th style={{ textAlign: 'left', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500 }}>Concepto *</th>
+                                        <th style={{ textAlign: 'center', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500, width: 100 }}>Cant.</th>
+                                        <th style={{ textAlign: 'right', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500, width: 110 }}>Precio Unit.</th>
+                                        <th style={{ textAlign: 'right', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500, width: 100 }}>Subtotal</th>
+                                        <th style={{ width: 28 }}></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {items.map(it => (
+                                        <tr key={it.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                            <td style={{ padding: '3px 4px' }}>
+                                                <input
+                                                    className="form-input"
+                                                    style={{ margin: 0, padding: '5px 4px', fontSize: '0.82rem' }}
+                                                    list="product-suggestions-list"
+                                                    value={it.concepto}
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        updateItem(it.id, 'concepto', val);
+                                                        // Si coincide con un producto real, autocompletar el precio
+                                                        const p = db.productos.find((pr: Producto) => pr.nombre === val);
+                                                        if (p) updateItem(it.id, 'precio_unitario', p.precio_costo);
+                                                    }}
+                                                    placeholder="Ej: Alimento..."
+                                                />
+                                            </td>
+                                            <td style={{ padding: '3px 4px' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--surface)', borderRadius: 6, border: '1px solid var(--border)', padding: '2px' }}>
+                                                    <button 
+                                                        type="button" 
+                                                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '0 4px', fontSize: '1rem' }}
+                                                        onClick={() => updateItem(it.id, 'cantidad', Math.max(1, it.cantidad - 1))}
+                                                    >−</button>
+                                                    <input
+                                                        className="form-input"
+                                                        style={{ margin: 0, padding: '2px 0', border: 'none', fontSize: '0.82rem', textAlign: 'center', width: 40, background: 'transparent' }}
+                                                        type="number" min="1" step="1"
+                                                        value={it.cantidad}
+                                                        onChange={e => updateItem(it.id, 'cantidad', Math.floor(Number(e.target.value)) || 1)}
+                                                    />
+                                                    <button 
+                                                        type="button" 
+                                                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '0 4px', fontSize: '1rem' }}
+                                                        onClick={() => updateItem(it.id, 'cantidad', it.cantidad + 1)}
+                                                    >＋</button>
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '3px 4px' }}>
+                                                <input
+                                                    className="form-input"
+                                                    style={{ margin: 0, padding: '5px 4px', fontSize: '0.82rem', textAlign: 'right' }}
+                                                    type="number" min="0" step="0.01"
+                                                    value={it.precio_unitario}
+                                                    onChange={e => updateItem(it.id, 'precio_unitario', e.target.value)}
+                                                />
+                                            </td>
+                                            <td style={{ padding: '3px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--accent)' }}>
+                                                {fmtMoney(it.cantidad * it.precio_unitario)}
+                                            </td>
+                                            <td style={{ padding: '3px 4px', textAlign: 'center' }}>
+                                                <button type="button" onClick={() => removeItem(it.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: '1rem', lineHeight: 1 }}>✕</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                                <datalist id="product-suggestions-list">
+                                    {db.productos.map((p: Producto) => (
+                                        <option key={p.id} value={p.nombre} />
+                                    ))}
+                                </datalist>
+                                <tfoot>
+                                    <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                        <td colSpan={3} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.85rem' }}>TOTAL</td>
+                                        <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--accent)', fontSize: '1rem' }}>{fmtMoney(totalDesdeItems)}</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        )}
                     </div>
+
+                    {/* Monto manual (solo si no hay ítems) */}
+                    {!tieneItems && (
+                        <div className="form-group">
+                            <div className="form-label">Monto Total *</div>
+                            <input className="form-input" type="number" min="0" step="0.01" placeholder="0" value={form.monto_total} onChange={set('monto_total')} />
+                        </div>
+                    )}
                     <div className="form-row">
                         <div className="form-group">
                             <div className="form-label">Fecha Emisión *</div>
@@ -1801,7 +2192,7 @@ function PurchaseOrderScreen({ addToast }: {
             <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginBottom: '20px' }}>
                 Revisá los productos con bajo stock u agregá nuevos que necesites reponer. Ajusta cantidades y copía la lista para enviar por WhatsApp a tus proveedores.
             </p>
-
+               {/* Header Facturas */}
             <div className="po-layout" style={{ display: 'flex', gap: '20px', flexDirection: 'row', alignItems: 'flex-start' }}>
                 {/* ── IZQUIERDA: Buscador y Sugerencias ── */}
                 <div className="po-search-box" style={{ background: 'var(--surface)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border)', flex: '1', minWidth: '300px' }}>
