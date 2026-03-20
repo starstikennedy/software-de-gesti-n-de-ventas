@@ -16,7 +16,7 @@ export enum TipoMovimiento {
 
 // ── 2. INTERFACES / TIPOS ────────────────────────────────────
 export interface Producto {
-    id: number;
+    id: string; // UUID de Supabase
     nombre: string;
     sku: string;
     precio_venta: number;
@@ -26,33 +26,36 @@ export interface Producto {
     categoria: string;
     especie: string;
     emoji: string;
-    imagen?: string;   // URL de foto (reservado para futuro)
-    peso_kg?: number;  // Peso en kg (para ordenar y para venta por kilo)
-    venta_a_granel?: boolean; // Si es true, se puede vender por fracción de kg/monto
-    id_producto_suelto?: number; // ID del producto a granel que abastece este saco
-    kilos_por_saco?: number; // Cuántos kg transfiere al producto suelto cuando se abre
+    imagen?: string;
+    peso_kg?: number;
+    venta_a_granel?: boolean;
+    id_producto_suelto?: string; // UUID vinculado
+    kilos_por_saco?: number;
 }
 
 export interface Venta {
-    id_venta: number;
-    fecha_hora: string; // ISO string
+    id_venta: string; // UUID
+    fecha_hora: string;
     total_venta: number;
     total_costo?: number;
     utilidad?: number;
     metodo_pago: MetodoPago;
+    banco?: string;
+    vendedor?: string;
+    items?: any[]; // Snapshot del carrito en formato JSON
 }
 
 export interface DetalleVenta {
-    id_detalle: number;
-    id_venta: number;
-    id_producto: number;
+    id_detalle: string;
+    id_venta: string;
+    id_producto: string;
     cantidad: number;
     subtotal: number;
 }
 
 export interface MovimientoStock {
-    id_movimiento: number;
-    id_producto: number;
+    id_movimiento: string; // UUID
+    id_producto: string; // UUID
     tipo: TipoMovimiento;
     cantidad: number;
     fecha: string; // ISO string
@@ -60,7 +63,7 @@ export interface MovimientoStock {
 }
 
 export interface ItemCarrito {
-    id: number;
+    id: string; // UUID de Supabase
     nombre: string;
     precio: number;
     qty: number;
@@ -80,10 +83,11 @@ export enum EstadoFactura {
 export type TipoFactura = 'Compra';
 
 export interface ItemFactura {
-    id: number;            // id local dentro de la factura
+    id: string;            // UUID
     concepto: string;      // nombre del producto / servicio
     cantidad: number;
     precio_unitario: number;
+    descuento?: number;    // descuento en pesos
 }
 
 export interface LogFactura {
@@ -94,33 +98,39 @@ export interface LogFactura {
 }
 
 export interface Factura {
-    id: number;
-    numero: string;         // Ej: FAC-001
+    id: string; // UUID
+    numero: string;
     tipo: TipoFactura;
     proveedor_cliente: string;
     descripcion: string;
     monto_total: number;
-    fecha_emision: string;  // ISO date string
-    fecha_vencimiento: string; // ISO date string
+    fecha_emision: string;
+    fecha_vencimiento: string;
     estado: EstadoFactura;
     notas?: string;
-    imagen_url?: string;    // base64 data URL de la foto de la factura
-    responsable_subida?: string;
-    responsable_pago?: string;
-    metodo_pago_final?: string;   // Efectivo / Transferencia / Tarjeta
-    fecha_pago?: string;          // ISO date string de cuándo se pagó
-    items?: ItemFactura[];         // líneas de detalle de la factura
-    historial?: LogFactura[];      // log de auditoría
+    imagen_url?: string;
+    registrado_por?: string;
+    pagado_por?: string;
+    metodo_pago?: string;
+    banco?: string;
+    fecha_pago?: string;
+    items?: ItemFactura[];
+    historial?: LogFactura[];
+    descuento_global?: number;
+    valor_neto?: number;
 }
 
 export interface Cliente {
-    id: number;
+    id: string; // UUID
     nombre: string;
     telefono: string;
     direccion: string;
+    email?: string;
     notas?: string;
     total_compras: number;
     fecha_registro: string;
+    deuda?: number;
+    frecuente?: boolean;
 }
 
 export enum EstadoPedido {
@@ -131,9 +141,9 @@ export enum EstadoPedido {
 }
 
 export interface Pedido {
-    id: number;
-    id_cliente: number;
-    id_venta?: number; // Vinculado si se entregó y "cobró" formalmente en el pos
+    id: string; // UUID
+    id_cliente: string; // UUID
+    id_venta?: string; // UUID vinculado si se entregó y "cobró" formalmente en el pos
     items: ItemCarrito[];
     total: number;
     estado: EstadoPedido;
@@ -143,6 +153,20 @@ export interface Pedido {
     nota_delivery?: string;
 }
 
+export interface Auditoria {
+    id: string; // UUID
+    fecha: string; // ISO
+    usuario: string; // Email o nombre
+    accion: string; // Ej: "Venta realizada", "Producto editado"
+    modulo: string; // Ej: "Ventas", "Inventario", "Facturas"
+    detalle: string; // Más info JSON o texto
+}
+
+import { supabase } from './supabaseClient';
+
+// ── 3. FACTURAS, PEDIDOS Y CLIENTES ──────────────────────────
+// ... (mismos enums e interfaces)
+
 export interface DB {
     productos: Producto[];
     ventas: Venta[];
@@ -151,8 +175,10 @@ export interface DB {
     facturas: Factura[];
     clientes: Cliente[];
     pedidos: Pedido[];
+    auditoria: Auditoria[];
 }
 
+// Mantenemos una instancia reactiva local para el estado de la UI
 export const db: DB = {
     productos: [],
     ventas: [],
@@ -161,35 +187,95 @@ export const db: DB = {
     facturas: [],
     clientes: [],
     pedidos: [],
+    auditoria: [],
 };
 
-// ── 4. SEED DATA ─────────────────────────────────────────────
-export function seedData(): void {
-    db.productos = [
-        // Alimento Perro
-        { id: 1, nombre: 'Royal Canin Adulto 15kg', sku: 'RC-AD-15', precio_venta: 42000, precio_costo: 30000, stock_actual: 12, stock_minimo: 3, categoria: 'Alimento', especie: 'Perro', emoji: '🐶', peso_kg: 15 },
-        { id: 2, nombre: 'Purina Dog Chow 3kg', sku: 'PDC-3', precio_venta: 12500, precio_costo: 8500, stock_actual: 20, stock_minimo: 5, categoria: 'Alimento', especie: 'Perro', emoji: '🐶', peso_kg: 3 },
-        { id: 3, nombre: 'Hills Science Diet 7kg', sku: 'HSD-7', precio_venta: 32000, precio_costo: 22000, stock_actual: 8, stock_minimo: 2, categoria: 'Alimento', especie: 'Perro', emoji: '🐶', peso_kg: 7 },
-        // Alimento Gato
-        { id: 4, nombre: 'Royal Canin Kitten 2kg', sku: 'RC-KIT-2', precio_venta: 18000, precio_costo: 12000, stock_actual: 10, stock_minimo: 3, categoria: 'Alimento', especie: 'Gato', emoji: '🐱', peso_kg: 2 },
-        { id: 5, nombre: 'Whiskas Adulto 3kg', sku: 'WH-AD-3', precio_venta: 9500, precio_costo: 6500, stock_actual: 15, stock_minimo: 4, categoria: 'Alimento', especie: 'Gato', emoji: '🐱', peso_kg: 3 },
-        { id: 6, nombre: 'Felix Pouch x 12 unid', sku: 'FX-P12', precio_venta: 7200, precio_costo: 4800, stock_actual: 3, stock_minimo: 5, categoria: 'Alimento', especie: 'Gato', emoji: '🐱' },
-        // Snacks
-        { id: 7, nombre: 'Pedigree Dentastix', sku: 'PG-DENT', precio_venta: 4500, precio_costo: 2800, stock_actual: 25, stock_minimo: 5, categoria: 'Snacks', especie: 'Perro', emoji: '🦴' },
-        { id: 8, nombre: 'Premio Adulto x 100g', sku: 'PM-100', precio_venta: 2200, precio_costo: 1400, stock_actual: 30, stock_minimo: 8, categoria: 'Snacks', especie: 'Perro', emoji: '🦴', peso_kg: 0.1 },
-        { id: 9, nombre: 'Temptations Gato 85g', sku: 'TMP-85', precio_venta: 3200, precio_costo: 1900, stock_actual: 18, stock_minimo: 5, categoria: 'Snacks', especie: 'Gato', emoji: '😺', peso_kg: 0.085 },
-        // Accesorios
-        { id: 10, nombre: 'Collar Ajustable M', sku: 'COL-M', precio_venta: 3800, precio_costo: 2000, stock_actual: 7, stock_minimo: 2, categoria: 'Accesorios', especie: 'Perro', emoji: '🏷️' },
-        { id: 11, nombre: 'Correa Extensible 5m', sku: 'COR-5M', precio_venta: 8500, precio_costo: 5000, stock_actual: 5, stock_minimo: 2, categoria: 'Accesorios', especie: 'Perro', emoji: '🐕' },
-        // Higiene
-        { id: 12, nombre: 'Arena Sanitaria 5L', sku: 'AR-5L', precio_venta: 5500, precio_costo: 3200, stock_actual: 0, stock_minimo: 4, categoria: 'Higiene', especie: 'Gato', emoji: '🧹', peso_kg: 5 },
-        { id: 13, nombre: 'Shampoo Medicado 250ml', sku: 'SH-MED', precio_venta: 6200, precio_costo: 3800, stock_actual: 9, stock_minimo: 3, categoria: 'Higiene', especie: 'Perro', emoji: '🛁' },
-    ];
-    // Facturas iniciales para sugerencias
-    db.facturas = [
-        { id: 1, numero: 'FAC-001', tipo: 'Compra', proveedor_cliente: 'Royal Canin S.A.', descripcion: 'Compra mensual', monto_total: 150000, fecha_emision: '2024-03-01', fecha_vencimiento: '2024-03-15', estado: EstadoFactura.Pagada },
-        { id: 2, numero: 'FAC-002', tipo: 'Compra', proveedor_cliente: 'Purina Latam', descripcion: 'Suministro snacks', monto_total: 85000, fecha_emision: '2024-03-05', fecha_vencimiento: '2024-03-20', estado: EstadoFactura.PorPagar },
-    ];
+// ── 4. SEED DATA & INITIALIZATION ────────────────────────────
+
+/** Hace un ping liviano a Supabase para "despertar" el servidor antes del login */
+export async function wakeUpSupabase(): Promise<void> {
+    try {
+        await supabase.from('productos').select('id').limit(1);
+    } catch (_) {
+        // silencioso — solo queremos despertar la conexión
+    }
+}
+
+/** Descarga todos los datos de Supabase y puebla el objeto `db` local */
+export async function syncFromCloud(): Promise<void> {
+    try {
+        // Limitar ventas a los últimos 90 días para no traer todo el historial
+        const fechaCorte = new Date();
+        fechaCorte.setDate(fechaCorte.getDate() - 90);
+        const fechaCorteISO = fechaCorte.toISOString();
+
+        const [
+            { data: prods },
+            { data: vnts },
+            { data: facts },
+            { data: clnts },
+            { data: peds },
+            { data: logs }
+        ] = await Promise.all([
+            supabase.from('productos').select('*').order('nombre'),
+            supabase.from('ventas').select('*').gte('fecha_hora', fechaCorteISO).order('fecha_hora', { ascending: false }),
+            supabase.from('facturas').select('*').order('fecha_emision', { ascending: false }),
+            supabase.from('clientes').select('*').order('nombre'),
+            supabase.from('pedidos').select('*').order('fecha_creacion', { ascending: false }),
+            supabase.from('auditoria').select('*').limit(200).order('fecha', { ascending: false })
+        ]);
+
+        if (prods) db.productos = (prods as any[]).map(p => ({
+            ...p,
+            precio_venta: p.precio,
+            precio_costo: p.costo,
+            stock_actual: p.stock,
+            stock_minimo: 5, // default
+            especie: p.mascota || 'Varios',
+            emoji: '📦'
+        }));
+        if (vnts) db.ventas = vnts as any[];
+        if (facts) db.facturas = (facts as any[]).map(f => ({
+            ...f,
+            proveedor_cliente: f.proveedor,
+            monto_total: f.monto_total,
+            items: f.items || []
+        }));
+        if (clnts) db.clientes = clnts as any[];
+        if (peds) db.pedidos = peds as any[];
+        if (logs) db.auditoria = logs;
+    } catch (e) {
+        console.error('Error syncing from cloud:', e);
+    }
+}
+
+/** Registra un evento en la tabla de auditoría */
+export async function registrarAuditoria(usuario: string, accion: string, modulo: string, detalle: string): Promise<void> {
+    try {
+        const { data, error } = await supabase
+            .from('auditoria')
+            .insert([{
+                fecha: new Date().toISOString(),
+                usuario,
+                accion,
+                modulo,
+                detalle
+            }])
+            .select()
+            .single();
+
+        if (error) {
+            console.warn('No se pudo registrar en la tabla auditoria:', error.message);
+            return;
+        }
+
+        if (data) {
+            db.auditoria.unshift(data as any);
+            if (db.auditoria.length > 200) db.auditoria.pop();
+        }
+    } catch (e) {
+        console.error('Error en registrarAuditoria:', e);
+    }
 }
 
 // Helper: obtener todas las especies únicas del catálogo
@@ -201,30 +287,25 @@ export const getCategorias = (): string[] =>
     ['Todos', ...Array.from(new Set(db.productos.map((p) => p.categoria))).sort()];
 
 // ── 5. HELPERS INTERNOS ──────────────────────────────────────
-function nextId(arr: { id?: number; id_venta?: number; id_detalle?: number; id_movimiento?: number }[]): number {
-    if (!arr.length) return 1;
-    return Math.max(...arr.map((x: any) => x.id ?? x.id_venta ?? x.id_detalle ?? x.id_movimiento ?? 0)) + 1;
-}
-
-export function getProducto(id: number): Producto | undefined {
+export function getProducto(id: string): Producto | undefined {
     return db.productos.find((p) => p.id === id);
 }
 
 // ── 6. CHECKOUT — CRITICAL PATH ──────────────────────────────
 export interface CheckoutResult {
     ok: boolean;
-    ventaId?: number;
+    ventaId?: string;
     total?: number;
     error?: string;
 }
 
-export function checkout(carrito: ItemCarrito[], metodo: MetodoPago): CheckoutResult {
+export async function checkout(carrito: ItemCarrito[], metodo: MetodoPago, banco?: string, vendedor?: string): Promise<CheckoutResult> {
     if (!carrito.length) return { ok: false, error: 'El carrito está vacío' };
 
     let totalVenta = 0;
     let totalCosto = 0;
 
-    // Validar stock
+    // Validar stock localmente primero (optimista)
     for (const item of carrito) {
         const prod = getProducto(item.id);
         if (!prod) return { ok: false, error: `Producto #${item.id} no encontrado` };
@@ -236,65 +317,132 @@ export function checkout(carrito: ItemCarrito[], metodo: MetodoPago): CheckoutRe
     }
 
     const utilidad = totalVenta - totalCosto;
-    const now = new Date().toISOString();
-    const ventaId = nextId(db.ventas);
 
-    // Registrar venta
-    db.ventas.push({ id_venta: ventaId, fecha_hora: now, total_venta: totalVenta, total_costo: totalCosto, utilidad: utilidad, metodo_pago: metodo });
+    try {
+        // 1. Registrar venta en Supabase
+        const { data: ventaData, error: ventaError } = await supabase
+            .from('ventas')
+            .insert([{
+                total: totalVenta,
+                metodo_pago: metodo,
+                banco: banco,
+                items: carrito,
+                vendedor: vendedor || 'Sistema'
+            }])
+            .select()
+            .single();
 
-    // Detalle + ajuste de stock
-    carrito.forEach((item) => {
-        db.detalle_venta.push({
-            id_detalle: nextId(db.detalle_venta),
-            id_venta: ventaId,
-            id_producto: item.id,
-            cantidad: item.qty,
-            subtotal: item.qty * item.precio,
-        });
-        const prod = getProducto(item.id)!;
-        prod.stock_actual -= item.qty;
-        db.movimientos_stock.push({
-            id_movimiento: nextId(db.movimientos_stock),
-            id_producto: item.id,
-            tipo: TipoMovimiento.Salida,
-            cantidad: item.qty,
-            fecha: now,
-            nota: `Venta #${ventaId}`,
-        });
-    });
+        if (ventaError) throw ventaError;
 
-    return { ok: true, ventaId, total: totalVenta };
+        const ventaId = ventaData.id;
+
+        // 2. Detalle + ajuste de stock (en el futuro esto debería ser una transacción/ RPC)
+        for (const item of carrito) {
+            // Actualizar stock en Supabase
+            const prod = getProducto(item.id)!;
+            const nuevoStock = prod.stock_actual - item.qty;
+            
+            await supabase
+                .from('productos')
+                .update({ stock: nuevoStock })
+                .eq('id', item.id);
+
+            // Nota: Aquí podríamos insertar en una tabla de movimientos si la creamos
+        }
+
+        // 3. Sincronizar cache local
+        await syncFromCloud();
+
+        // 4. Auditoría
+        await registrarAuditoria(vendedor || 'Sistema', `Venta realizada: ${fmtMoney(totalVenta)}`, 'Ventas', `Método: ${metodo}${banco ? ` (${banco})` : ''}. Items: ${carrito.length}`);
+
+        return { ok: true, ventaId, total: totalVenta };
+    } catch (err: any) {
+        console.error('Checkout error:', err);
+        return { ok: false, error: err.message };
+    }
 }
 
 // ── 7. CARGAR STOCK ──────────────────────────────────────────
-export function cargarStock(productoId: number, cantidad: number, nota = 'Carga manual'): boolean {
+export async function cargarStock(productoId: string, cantidad: number, usuario = 'Sistema', nota = 'Carga manual'): Promise<boolean> {
     const prod = getProducto(productoId);
     if (!prod || cantidad <= 0) return false;
-    prod.stock_actual += cantidad;
-    db.movimientos_stock.push({
-        id_movimiento: nextId(db.movimientos_stock),
-        id_producto: productoId,
-        tipo: TipoMovimiento.Entrada,
-        cantidad,
-        fecha: new Date().toISOString(),
-        nota,
-    });
-    return true;
+
+    try {
+        const nuevoStock = prod.stock_actual + cantidad;
+        const { error } = await supabase
+            .from('productos')
+            .update({ stock: nuevoStock })
+            .eq('id', productoId);
+
+        if (error) throw error;
+        await syncFromCloud();
+
+        await registrarAuditoria(usuario, `Stock cargado: +${cantidad} en ${prod.nombre}`, 'Inventario', `Motivo: ${nota}`);
+        
+        return true;
+    } catch (e) {
+        console.error('Error al cargar stock:', e);
+        return false;
+    }
 }
 
 // ── 8. AGREGAR/EDITAR PRODUCTOS ──────────────────────────────
-export function agregarProducto(data: Omit<Producto, 'id'>): Producto {
-    const newId = nextId(db.productos);
-    const prod: Producto = { id: newId, ...data };
-    db.productos.push(prod);
-    return prod;
+export async function agregarProducto(data: Omit<Producto, 'id'>, usuario = 'Sistema'): Promise<Producto | null> {
+    try {
+        const { data: newProd, error } = await supabase
+            .from('productos')
+            .insert([{
+                sku: data.sku,
+                nombre: data.nombre,
+                precio: data.precio_venta,
+                costo: data.precio_costo,
+                stock: data.stock_actual,
+                categoria: data.categoria,
+                mascota: data.especie,
+                peso: data.peso_kg
+            }])
+            .select()
+            .single();
+
+        if (error) throw error;
+        await syncFromCloud();
+
+        await registrarAuditoria(usuario, `Producto creado: ${data.nombre}`, 'Inventario', `SKU: ${data.sku}, Stock: ${data.stock_actual}`);
+
+        return newProd as any;
+    } catch (e) {
+        console.error('Error al agregar producto:', e);
+        return null;
+    }
 }
 
-export function editarProducto(id: number, data: Partial<Omit<Producto, 'id'>>): boolean {
-    const prod = getProducto(id);
-    if (!prod) return false;
-    Object.assign(prod, data);
-    return true;
+export async function editarProducto(id: string, data: Partial<Omit<Producto, 'id'>>, usuario = 'Sistema'): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('productos')
+            .update({
+                sku: data.sku,
+                nombre: data.nombre,
+                precio: data.precio_venta,
+                costo: data.precio_costo,
+                stock: data.stock_actual,
+                categoria: data.categoria,
+                mascota: data.especie
+            })
+            .eq('id', id);
+
+        if (error) throw error;
+        await syncFromCloud();
+
+        const prod = getProducto(id);
+        await registrarAuditoria(usuario, `Producto editado: ${prod?.nombre || id}`, 'Inventario', `Cambios: ${Object.keys(data).join(', ')}`);
+
+        return true;
+    } catch (e) {
+        console.error('Error al editar producto:', e);
+        return false;
+    }
 }
 
 // ── 9. REPORTE DIARIO ────────────────────────────────────────
@@ -350,28 +498,36 @@ export function getReporteDiario(fecha = new Date()): ReporteDiario {
             desglose.pedidos.cantidad++;
         }
 
-        // Analizar items para Kilo vs Saco
-        const detalles = db.detalle_venta.filter(d => d.id_venta === v.id_venta);
-        detalles.forEach(d => {
-            const prod = getProducto(d.id_producto);
+        // Analizar items para Kilo vs Saco (items están en JSONB en ventas en Supabase)
+        const itemsVenta = Array.isArray(v.items) ? (v.items as any[]) : [];
+        itemsVenta.forEach(item => {
+            const prod = getProducto(item.id);
             if (!prod) return;
             
             if (prod.venta_a_granel) {
-                desglose.kilo.total += d.subtotal;
+                desglose.kilo.total += (item.qty * item.precio);
                 desglose.kilo.cantidad++;
             } else if (prod.id_producto_suelto) {
-                desglose.saco.total += d.subtotal;
+                desglose.saco.total += (item.qty * item.precio);
                 desglose.saco.cantidad++;
             }
         });
     });
 
-    const ventas = ventasHoy.map((v) => ({
-        ...v,
-        items: db.detalle_venta
-            .filter((d) => d.id_venta === v.id_venta)
-            .map((d) => ({ ...d, producto: getProducto(d.id_producto) })),
-    }));
+    const ventas = ventasHoy.map((v) => {
+        const itemsVenta = Array.isArray(v.items) ? (v.items as any[]) : [];
+        return {
+            ...v,
+            items: itemsVenta.map((it) => ({
+                id_detalle: '', // placeholder simple
+                id_venta: v.id_venta,
+                id_producto: it.id.toString(),
+                cantidad: it.qty,
+                subtotal: it.qty * it.precio,
+                producto: getProducto(it.id.toString())
+            }))
+        };
+    });
 
     return { fecha: dayStr, totalVentas, totalCosto, totalUtilidad, cantidadVentas: ventasHoy.length, porMetodo, desglose, ventas };
 }
@@ -383,7 +539,7 @@ export const getProductosBajoStock = (): Producto[] =>
 export const getProductosSinStock = (): Producto[] =>
     db.productos.filter((p) => p.stock_actual === 0);
 
-export const getHistorialProducto = (id: number): MovimientoStock[] =>
+export const getHistorialProducto = (id: string): MovimientoStock[] =>
     db.movimientos_stock.filter((m) => m.id_producto === id);
 
 // ── 11. UTILIDAD DE FORMATO ──────────────────────────────────
@@ -393,6 +549,20 @@ export function fmtMoney(n: number): string {
         currency: 'CLP',
         minimumFractionDigits: 0,
     }).format(n);
+}
+
+/** Formatea un número con puntos de miles (sin signo $) */
+export function formatCLP(n: number | string | undefined | null): string {
+    if (n === undefined || n === null || n === '') return '';
+    const val = typeof n === 'number' ? Math.floor(n) : parseInt(n.toString().replace(/\D/g, ''));
+    if (isNaN(val)) return '';
+    return new Intl.NumberFormat('es-CL').format(val);
+}
+
+/** Limpia puntos y convierte string formateado a número puro */
+export function parseCLP(s: string): number {
+    const clean = s.replace(/\./g, '').replace(/[^\d]/g, '');
+    return parseInt(clean) || 0;
 }
 
 // ── 12. REPORTE SEMANAL ──────────────────────────────────────
@@ -470,29 +640,29 @@ export function getReporteSemanal(fechaBase = new Date()): ReporteSemanal {
             porMetodo[v.metodo_pago].total += v.total_venta;
             porMetodo[v.metodo_pago].cantidad++;
 
-            // Desglose simplificado para el gráfico semanal
             const esPedido = db.pedidos.some(p => p.id_venta === v.id_venta);
             if (esPedido) desgloseTotal.pedidos += v.total_venta;
 
-            db.detalle_venta.filter(dt => dt.id_venta === v.id_venta).forEach(dt => {
-                const prod = getProducto(dt.id_producto);
+            const itemsVenta = Array.isArray(v.items) ? (v.items as any[]) : [];
+            itemsVenta.forEach(it => {
+                const prod = getProducto(it.id);
                 if (!prod) return;
-                if (prod.venta_a_granel) desgloseTotal.kilo += dt.subtotal;
-                else if (prod.id_producto_suelto) desgloseTotal.saco += dt.subtotal;
+                if (prod.venta_a_granel) desgloseTotal.kilo += (it.qty * it.precio);
+                else if (prod.id_producto_suelto) desgloseTotal.saco += (it.qty * it.precio);
             });
         });
 
         // Top productos del día
-        const conteo: Record<number, { nombre: string; emoji: string; cantidad: number }> = {};
+        const conteo: Record<string, { nombre: string; emoji: string; cantidad: number }> = {};
         ventasDia.forEach((v) => {
-            db.detalle_venta
-                .filter((dt) => dt.id_venta === v.id_venta)
-                .forEach((dt) => {
-                    const prod = getProducto(dt.id_producto);
-                    if (!prod) return;
-                    if (!conteo[dt.id_producto]) conteo[dt.id_producto] = { nombre: prod.nombre, emoji: prod.emoji, cantidad: 0 };
-                    conteo[dt.id_producto].cantidad += dt.cantidad;
-                });
+            const itemsVenta = Array.isArray(v.items) ? (v.items as any[]) : [];
+            itemsVenta.forEach((it) => {
+                const prod = getProducto(it.id);
+                if (!prod) return;
+                const pid = it.id;
+                if (!conteo[pid]) conteo[pid] = { nombre: prod.nombre, emoji: prod.emoji, cantidad: 0 };
+                conteo[pid].cantidad += it.qty;
+            });
         });
         const topProductos = Object.values(conteo)
             .sort((a, b) => b.cantidad - a.cantidad)
@@ -532,7 +702,7 @@ export function getReporteMensual(year: number, month: number): ReporteMensual {
         saco: { total: 0, cantidad: 0 },
     };
 
-    const conteoProd: Record<number, { nombre: string; emoji: string; totalBruto: number; cantidad: number }> = {};
+    const conteoProd: Record<string, { nombre: string; emoji: string; totalBruto: number; cantidad: number }> = {};
 
     ventasMes.forEach((v) => {
         const esPedido = db.pedidos.some((p) => p.id_venta === v.id_venta);
@@ -541,26 +711,27 @@ export function getReporteMensual(year: number, month: number): ReporteMensual {
             desglose.pedidos.cantidad++;
         }
 
-        db.detalle_venta
-            .filter((dt) => dt.id_venta === v.id_venta)
-            .forEach((dt) => {
-                const prod = getProducto(dt.id_producto);
-                if (!prod) return;
+        const itemsVenta = Array.isArray(v.items) ? (v.items as any[]) : [];
+        itemsVenta.forEach((it) => {
+            const prod = getProducto(it.id);
+            if (!prod) return;
 
-                if (prod.venta_a_granel) {
-                    desglose.kilo.total += dt.subtotal;
-                    desglose.kilo.cantidad++;
-                } else if (prod.id_producto_suelto) {
-                    desglose.saco.total += dt.subtotal;
-                    desglose.saco.cantidad++;
-                }
+            const sub = it.qty * it.precio;
+            if (prod.venta_a_granel) {
+                desglose.kilo.total += sub;
+                desglose.kilo.cantidad++;
+            } else if (prod.id_producto_suelto) {
+                desglose.saco.total += sub;
+                desglose.saco.cantidad++;
+            }
 
-                if (!conteoProd[dt.id_producto]) {
-                    conteoProd[dt.id_producto] = { nombre: prod.nombre, emoji: prod.emoji, totalBruto: 0, cantidad: 0 };
-                }
-                conteoProd[dt.id_producto].totalBruto += dt.subtotal;
-                conteoProd[dt.id_producto].cantidad += dt.cantidad;
-            });
+            const pid = it.id;
+            if (!conteoProd[pid]) {
+                conteoProd[pid] = { nombre: prod.nombre, emoji: prod.emoji, totalBruto: 0, cantidad: 0 };
+            }
+            conteoProd[pid].totalBruto += sub;
+            conteoProd[pid].cantidad += it.qty;
+        });
     });
 
     const topProducto = Object.values(conteoProd).sort((a, b) => b.totalBruto - a.totalBruto)[0];
@@ -578,7 +749,7 @@ export function getReporteMensual(year: number, month: number): ReporteMensual {
 }
 
 // ── 14. LÓGICA DE SACOS ──────────────────────────────────────
-export function abrirSaco(idSaco: number): { ok: boolean; error?: string } {
+export async function abrirSaco(idSaco: string): Promise<{ ok: boolean; error?: string }> {
     const saco = getProducto(idSaco);
     if (!saco) return { ok: false, error: 'Saco no encontrado' };
     if (!saco.id_producto_suelto || !saco.kilos_por_saco) 
@@ -589,143 +760,194 @@ export function abrirSaco(idSaco: number): { ok: boolean; error?: string } {
     const suelto = getProducto(saco.id_producto_suelto);
     if (!suelto) return { ok: false, error: 'Producto suelto vinculado no encontrado' };
 
-    // Proceso: Restar 1 saco, Sumar kilos al suelto
-    saco.stock_actual -= 1;
-    suelto.stock_actual += saco.kilos_por_saco;
+    try {
+        // Proceso: Restar 1 saco, Sumar kilos al suelto
+        const stockSaco = saco.stock_actual - 1;
+        const stockSuelto = suelto.stock_actual + saco.kilos_por_saco;
 
-    const now = new Date().toISOString();
-    
-    // Movimiento salida saco
-    db.movimientos_stock.push({
-        id_movimiento: nextId(db.movimientos_stock),
-        id_producto: saco.id,
-        tipo: TipoMovimiento.Salida,
-        cantidad: 1,
-        fecha: now,
-        nota: `Apertura de saco -> ${suelto.nombre}`
-    });
+        await Promise.all([
+            supabase.from('productos').update({ stock: stockSaco }).eq('id', saco.id),
+            supabase.from('productos').update({ stock: stockSuelto }).eq('id', suelto.id)
+        ]);
 
-    // Movimiento entrada suelto
-    db.movimientos_stock.push({
-        id_movimiento: nextId(db.movimientos_stock),
-        id_producto: suelto.id,
-        tipo: TipoMovimiento.Entrada,
-        cantidad: saco.kilos_por_saco,
-        fecha: now,
-        nota: `Carga desde saco #${saco.id}`
-    });
-
-    return { ok: true };
+        await syncFromCloud();
+        return { ok: true };
+    } catch (e: any) {
+        return { ok: false, error: e.message };
+    }
 }
 
 // ── 14. FACTURAS ─────────────────────────────────────────────
 
-export function agregarFactura(data: Omit<Factura, 'id'>, usuario?: string): Factura {
-    const id = db.facturas.length ? Math.max(...db.facturas.map((f) => f.id)) + 1 : 1;
-    const factura: Factura = {
-        id,
-        ...data,
-        historial: [
-            { accion: 'Factura creada', fecha: new Date().toISOString(), usuario },
-            ...(data.historial ?? []),
-        ],
-    };
-    db.facturas.push(factura);
-    return factura;
+// ── 14. FACTURAS ─────────────────────────────────────────────
+
+export async function agregarFactura(data: Omit<Factura, 'id'>, usuario?: string): Promise<Factura | null> {
+    const { data: newFact, error } = await supabase
+        .from('facturas')
+        .insert([{
+            numero: data.numero,
+            proveedor: data.proveedor_cliente,
+            descripcion: data.descripcion,
+            monto_total: data.monto_total,
+            fecha_emision: data.fecha_emision,
+            fecha_vencimiento: data.fecha_vencimiento,
+            estado: data.estado,
+            items: data.items,
+            registrado_por: usuario
+        }])
+        .select()
+        .single();
+
+    if (error) throw new Error(`Supabase error: ${error.message} (${error.code})`);
+    
+    // Actualizar caché local inmediatamente sin esperar syncFromCloud
+    if (newFact) {
+        db.facturas.push({ ...newFact as any, proveedor_cliente: (newFact as any).proveedor });
+        await registrarAuditoria(usuario || 'Sistema', `Factura creada: ${data.numero}`, 'Facturas', `Proveedor: ${data.proveedor_cliente}, Monto: ${fmtMoney(data.monto_total)}`);
+    }
+    syncFromCloud(); // En segundo plano, sin await
+    return newFact as any;
 }
 
-export function actualizarEstadoFactura(id: number, estado: EstadoFactura, usuario?: string): boolean {
-    const f = db.facturas.find((f) => f.id === id);
-    if (!f) return false;
-    f.estado = estado;
-    const accionMap: Record<EstadoFactura, string> = {
-        [EstadoFactura.PorPagar]: 'Revertida a Por Pagar',
-        [EstadoFactura.Pagada]: 'Marcada como Pagada',
-        [EstadoFactura.Vencida]: 'Marcada como Vencida',
-        [EstadoFactura.Anulada]: 'Anulada',
-    };
-    if (!f.historial) f.historial = [];
-    f.historial.push({ accion: accionMap[estado] ?? estado, fecha: new Date().toISOString(), usuario });
-    return true;
+export async function actualizarEstadoFactura(id: string, estado: EstadoFactura, usuario?: string): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('facturas')
+            .update({ estado })
+            .eq('id', id);
+
+        if (error) throw error;
+        await syncFromCloud();
+        return true;
+    } catch (e) {
+        console.error('Error al actualizar estado factura:', e);
+        return false;
+    }
 }
 
-export function editarFactura(id: number, data: Partial<Omit<Factura, 'id'>>, usuario?: string): boolean {
-    const f = db.facturas.find((f) => f.id === id);
-    if (!f) return false;
-    Object.assign(f, data);
-    if (!f.historial) f.historial = [];
-    f.historial.push({ accion: 'Factura editada', fecha: new Date().toISOString(), usuario });
-    return true;
+export async function editarFactura(id: string, data: Partial<Omit<Factura, 'id'>>, usuario?: string): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('facturas')
+            .update({
+                numero: data.numero,
+                proveedor: data.proveedor_cliente,
+                descripcion: data.descripcion,
+                monto_total: data.monto_total,
+                estado: data.estado
+            })
+            .eq('id', id);
+
+        if (error) throw error;
+        await syncFromCloud();
+
+        await registrarAuditoria(usuario || 'Sistema', `Factura editada: ${data.numero}`, 'Facturas', `ID: ${id}`);
+
+        return true;
+    } catch (e) {
+        console.error('Error al editar factura:', e);
+        return false;
+    }
 }
 
-export function pagarFactura(id: number, metodo: string, responsable: string, fecha: string, usuario?: string): boolean {
-    const f = db.facturas.find((f) => f.id === id);
-    if (!f) return false;
-    f.estado = EstadoFactura.Pagada;
-    f.metodo_pago_final = metodo;
-    f.responsable_pago = responsable;
-    f.fecha_pago = fecha;
-    if (!f.historial) f.historial = [];
-    f.historial.push({ accion: 'Marcada como Pagada', fecha: new Date().toISOString(), detalle: `Método: ${metodo}`, usuario });
-    return true;
+export async function pagarFactura(id: string, metodo: string, banco: string, responsable: string, fecha: string, usuario?: string): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('facturas')
+            .update({
+                estado: EstadoFactura.Pagada,
+                metodo_pago: metodo,
+                banco: banco,
+                pagado_por: responsable,
+                fecha_pago: fecha
+            })
+            .eq('id', id);
+
+        if (error) throw error;
+        await syncFromCloud();
+
+        await registrarAuditoria(usuario || 'Sistema', `Factura pagada: ${id}`, 'Facturas', `Método: ${metodo}${banco ? ` (${banco})` : ''}, Responsable: ${responsable}`);
+
+        return true;
+    } catch (e) {
+        console.error('Error al pagar factura:', e);
+        return false;
+    }
 }
 
-export function cancelarPago(id: number, usuario?: string): boolean {
-    const f = db.facturas.find((f) => f.id === id);
-    if (!f) return false;
-    f.estado = EstadoFactura.PorPagar;
-    f.metodo_pago_final = undefined;
-    f.responsable_pago = undefined;
-    f.fecha_pago = undefined;
-    if (!f.historial) f.historial = [];
-    f.historial.push({ accion: 'Pago deshecho', fecha: new Date().toISOString(), usuario });
-    return true;
+export async function cancelarPago(id: string, usuario?: string): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('facturas')
+            .update({
+                estado: EstadoFactura.PorPagar,
+                metodo_pago: null,
+                banco: null,
+                pagado_por: null,
+                fecha_pago: null
+            })
+            .eq('id', id);
+
+        if (error) throw error;
+        await syncFromCloud();
+        return true;
+    } catch (e) {
+        console.error('Error al cancelar pago:', e);
+        return false;
+    }
 }
 
-export function reactivarFactura(id: number, usuario?: string): boolean {
-    const f = db.facturas.find((f) => f.id === id);
-    if (!f) return false;
-    f.estado = EstadoFactura.PorPagar;
-    if (!f.historial) f.historial = [];
-    f.historial.push({ accion: 'Anulación deshecha — reactivada', fecha: new Date().toISOString(), usuario });
-    return true;
+export async function reactivarFactura(id: string, usuario?: string): Promise<boolean> {
+    return actualizarEstadoFactura(id, EstadoFactura.PorPagar, usuario);
 }
 
 export function getFacturas(): Factura[] {
-    // Auto-detectar vencidas al leer
-    db.facturas.forEach((f) => {
-        if (
-            f.estado === EstadoFactura.PorPagar &&
-            new Date(f.fecha_vencimiento + 'T12:00:00') < new Date()
-        ) {
-            f.estado = EstadoFactura.Vencida;
-        }
-    });
+    // Note: here we sort or filter the local db cache
     return db.facturas;
 }
 
 // ── 15. CLIENTES (CRM) ────────────────────────────────────────
-export function crearCliente(data: Omit<Cliente, 'id' | 'total_compras' | 'fecha_registro'>): Cliente {
-    const id = nextId(db.clientes as any);
-    const cliente: Cliente = {
-        id,
-        ...data,
-        total_compras: 0,
-        fecha_registro: new Date().toISOString(),
-    };
-    db.clientes.push(cliente);
-    return cliente;
+export async function crearCliente(data: Omit<Cliente, 'id' | 'total_compras' | 'fecha_registro'>): Promise<Cliente | null> {
+    try {
+        const { data: newClient, error } = await supabase
+            .from('clientes')
+            .insert([{
+                nombre: data.nombre,
+                telefono: data.telefono,
+                email: data.email,
+                deuda: data.deuda || 0,
+                frecuente: data.frecuente || false
+            }])
+            .select()
+            .single();
+
+        if (error) throw error;
+        await syncFromCloud();
+        return newClient as any;
+    } catch (e) {
+        console.error('Error al crear cliente:', e);
+        return null;
+    }
 }
 
-export function editarCliente(id: number, data: Partial<Omit<Cliente, 'id' | 'total_compras' | 'fecha_registro'>>): boolean {
-    const c = db.clientes.find((x) => x.id === id);
-    if (!c) return false;
-    Object.assign(c, data);
-    return true;
+export async function editarCliente(id: string, data: Partial<Omit<Cliente, 'id' | 'total_compras' | 'fecha_registro'>>): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('clientes')
+            .update(data)
+            .eq('id', id);
+
+        if (error) throw error;
+        await syncFromCloud();
+        return true;
+    } catch (e) {
+        console.error('Error al editar cliente:', e);
+        return false;
+    }
 }
 
 export function getClientes(): Cliente[] {
-    return db.clientes.sort((a, b) => b.total_compras - a.total_compras);
+    return db.clientes.sort((a, b) => (b.total_compras || 0) - (a.total_compras || 0));
 }
 
 export function getClienteByPhone(phone: string): Cliente | undefined {
@@ -733,80 +955,87 @@ export function getClienteByPhone(phone: string): Cliente | undefined {
 }
 
 // ── 16. PEDIDOS (DELIVERY) ────────────────────────────────────
-export function crearPedido(data: Omit<Pedido, 'id' | 'fecha_creacion'>): Pedido {
-    const id = nextId(db.pedidos as any);
-    
-    // Descontar stock inmediatamente al crear pedido (para que no se venda en local)
-    data.items.forEach((item) => {
-        const prod = getProducto(item.id);
-        if (prod) {
-            prod.stock_actual -= item.qty;
-            db.movimientos_stock.push({
-                id_movimiento: nextId(db.movimientos_stock),
-                id_producto: item.id,
-                tipo: TipoMovimiento.Salida,
-                cantidad: item.qty,
-                fecha: new Date().toISOString(),
-                nota: `Reserva para Pedido #${id}`,
-            });
-        }
-    });
+export async function crearPedido(data: Omit<Pedido, 'id' | 'fecha_creacion'>, usuario?: string): Promise<Pedido | null> {
+    try {
+        const { data: newPed, error } = await supabase
+            .from('pedidos')
+            .insert([{
+                id_cliente: data.id_cliente,
+                items: data.items,
+                total: data.total,
+                estado: data.estado,
+                metodo_pago: data.metodo_pago,
+                nota_delivery: data.nota_delivery
+            }])
+            .select()
+            .single();
 
-    const pedido: Pedido = {
-        id,
-        ...data,
-        fecha_creacion: new Date().toISOString(),
-    };
-    db.pedidos.push(pedido);
-    return pedido;
+        if (error) throw error;
+        await syncFromCloud();
+
+        await registrarAuditoria(usuario || 'Sistema', `Pedido creado: ${newPed.id}`, 'Pedidos', `Total: ${fmtMoney(data.total)}`);
+
+        return newPed as any;
+    } catch (e) {
+        console.error('Error al crear pedido:', e);
+        return null;
+    }
 }
 
-export function actualizarEstadoPedido(id: number, estado: EstadoPedido): boolean {
-    const p = db.pedidos.find((x) => x.id === id);
-    if (!p) return false;
+export async function actualizarEstadoPedido(id: string, estado: EstadoPedido, usuario?: string): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('pedidos')
+            .update({ estado })
+            .eq('id', id);
 
-    // Si se cancela, devolvemos el stock
-    if (estado === EstadoPedido.Cancelado && p.estado !== EstadoPedido.Cancelado && p.estado !== EstadoPedido.Entregado) {
-        p.items.forEach((item) => {
-            const prod = getProducto(item.id);
-            if (prod) {
-                prod.stock_actual += item.qty;
-                db.movimientos_stock.push({
-                    id_movimiento: nextId(db.movimientos_stock),
-                    id_producto: item.id,
-                    tipo: TipoMovimiento.Entrada,
-                    cantidad: item.qty,
-                    fecha: new Date().toISOString(),
-                    nota: `Devolución por Pedido #${p.id} cancelado`,
-                });
-            }
-        });
+        if (error) throw error;
+
+        await syncFromCloud();
+
+        await registrarAuditoria(usuario || 'Sistema', `Estado pedido actualizado: ${estado}`, 'Pedidos', `ID: ${id}`);
+
+        return true;
+    } catch (e) {
+        console.error('Error al actualizar pedido:', e);
+        return false;
     }
-
-    // Si se entrega formalmente, lo cobramos como venta del día para que impacte en informes
-    // Solo si no estaba ya Entregado
-    if (estado === EstadoPedido.Entregado && p.estado !== EstadoPedido.Entregado) {
-        p.fecha_entrega = new Date().toISOString();
-        const res = checkout(p.items, p.metodo_pago || MetodoPago.Efectivo); // Pasamos por la caja fuerte
-        if (res.ok) {
-            p.id_venta = res.ventaId;
-            // Aumentamos compras del cliente
-            const c = db.clientes.find(x => x.id === p.id_cliente);
-            if (c) c.total_compras += p.total;
-        }
-    }
-
-    p.estado = estado;
-    return true;
 }
 
-export function editarPedido(id: number, data: { nota_delivery?: string; metodo_pago?: MetodoPago }): boolean {
-    const p = db.pedidos.find((x) => x.id === id);
-    if (!p) return false;
-    Object.assign(p, data);
-    return true;
+export async function editarPedido(id: string, data: { nota_delivery?: string; metodo_pago?: MetodoPago }): Promise<boolean> {
+    try {
+        const { error } = await supabase
+            .from('pedidos')
+            .update(data)
+            .eq('id', id);
+
+        if (error) throw error;
+        await syncFromCloud();
+        return true;
+    } catch (e) {
+        console.error('Error al editar pedido:', e);
+        return false;
+    }
 }
 
 export function getPedidos(): Pedido[] {
     return db.pedidos.slice().reverse(); // Show most recent first
+}
+
+/** Eliminar una factura por su id */
+export async function eliminarFactura(id: string, usuario = 'Sistema'): Promise<boolean> {
+    const { error } = await supabase
+        .from('facturas')
+        .delete()
+        .eq('id', id);
+
+    if (error) throw new Error(`Supabase error: ${error.message} (${error.code})`);
+    
+    // Actualizar caché local inmediatamente
+    db.facturas = db.facturas.filter(f => f.id !== id);
+    syncFromCloud(); // En segundo plano
+
+    await registrarAuditoria(usuario, `Factura eliminada: ${id}`, 'Facturas', '');
+
+    return true;
 }

@@ -28,3 +28,4 @@ dist-ssr
 src/pos.ts.tmp
 test-results/
 
+.env

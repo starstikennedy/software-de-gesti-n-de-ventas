@@ -1,82 +1,212 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
-    db, seedData, fmtMoney, checkout, cargarStock, agregarProducto, editarProducto, abrirSaco,
+    db, fmtMoney, checkout, cargarStock, agregarProducto, editarProducto, abrirSaco,
     getReporteDiario, getReporteSemanal, getReporteMensual, getProducto, getEspecies, getCategorias,
     agregarFactura, actualizarEstadoFactura, getFacturas, editarFactura, pagarFactura, cancelarPago,
     crearCliente, editarCliente, crearPedido, getPedidos, editarPedido, actualizarEstadoPedido, getClientes,
     MetodoPago, EstadoFactura, EstadoPedido, type Producto, type ItemCarrito, type Factura, type TipoFactura, type ItemFactura, type Cliente, type Pedido,
-    reactivarFactura
+    reactivarFactura, syncFromCloud, getClienteByPhone, eliminarFactura, wakeUpSupabase, formatCLP, parseCLP
 } from './pos';
+import { supabase } from './supabaseClient';
 
 // ── Tipos locales ─────────────────────────────────────
-type Tab = 'pos' | 'inventory' | 'ordenes' | 'pedidos' | 'clientes' | 'report' | 'weekly' | 'informes' | 'facturas';
+type Tab = 'pos' | 'inventory' | 'ordenes' | 'pedidos' | 'clientes' | 'analitica' | 'facturas' | 'auditoria';
 type ToastType = 'success' | 'error' | 'info';
 interface Toast { id: number; msg: string; type: ToastType; }
 interface User { email: string; name: string; }
+const ADMIN_EMAIL = 'mauricio.iturra.martinez23@gmail.com';
+const isAdmin = (user: User | null) => user?.email === ADMIN_EMAIL;
 
-// ── Inicializar datos ─────────────────────────────────
-seedData();
+// Extender tipos para UI (si es necesario alguno que no esté en pos.ts)
+// ItemCarrito ya viene de pos.ts con UUID
 
 // ═══════════════════════════════════════════════════════
 // COMPONENTES DE APOYO
 // ═══════════════════════════════════════════════════════
 
-function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
+function LoginScreen({ onLogin, addToast }: { 
+    onLogin: (u: User) => void;
+    addToast: (msg: string, type: ToastType) => void;
+}) {
+    const [view, setView] = useState<'login' | 'signup' | 'reset'>('login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [nombre, setNombre] = useState('');
+    const [loading, setLoading] = useState(false);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    // Ping a Supabase al montar para "despertar" el servidor (reduce cold start)
+    useEffect(() => { wakeUpSupabase(); }, []);
+
+    const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!email || !password || !nombre.trim()) return;
-        const user = { email, name: nombre.trim() };
-        localStorage.setItem('pos_user', JSON.stringify(user));
-        onLogin(user);
+        setLoading(true);
+        try {
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            if (data.user) {
+                onLogin({ email: data.user.email!, name: data.user.user_metadata?.full_name || data.user.email!.split('@')[0] });
+            }
+        } catch (err: any) {
+            addToast(`❌ Error: ${err.message}`, 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleSignUp = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            const { error } = await supabase.auth.signUp({ 
+                email, 
+                password,
+                options: {
+                    data: { full_name: nombre.trim() }
+                }
+            });
+            if (error) throw error;
+            addToast('📩 ¡Registro exitoso! Por favor revisa tu correo para confirmar tu cuenta.', 'info');
+            setView('login');
+        } catch (err: any) {
+            addToast(`❌ Error: ${err.message}`, 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleReset = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                redirectTo: window.location.origin + window.location.pathname
+            });
+            if (error) throw error;
+            addToast('📧 Se ha enviado un link de recuperación a tu correo.', 'info');
+            setView('login');
+        } catch (err: any) {
+            addToast(`❌ Error: ${err.message}`, 'error');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
         <div className="login-container">
             <div className="login-card">
                 <div className="login-header">
-                    <div className="login-logo">🐾 FJ Mascotas</div>
-                    <div className="login-subtitle">Sistema de Gestión de Ventas</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginBottom: '15px' }}>
+                        <img src="logo.png" alt="" style={{ maxHeight: '60px', borderRadius: '8px', display: 'block' }} onError={(e) => (e.currentTarget.style.display = 'none')} />
+                        <div style={{ fontSize: '1.8rem', fontWeight: 900, letterSpacing: '1px' }}>
+                            FJ <span style={{ color: 'var(--accent)' }}>MASCOTAS</span>
+                        </div>
+                    </div>
+                    <div className="login-subtitle">
+                        {view === 'login' ? 'Sistema de Gestión de Ventas' : 
+                         view === 'signup' ? 'Crear Cuenta Nueva' : 'Recuperar Contraseña'}
+                    </div>
                 </div>
-                <form className="login-form" onSubmit={handleSubmit}>
-                    <div className="form-group">
-                        <label className="form-label">Nombre / Usuario *</label>
-                        <input
-                            type="text"
-                            className="form-input"
-                            placeholder="Ej: Mauri"
-                            value={nombre}
-                            onChange={(e) => setNombre(e.target.value)}
-                            required
-                        />
-                    </div>
-                    <div className="form-group">
-                        <label className="form-label">Email / Gmail</label>
-                        <input 
-                            type="email" 
-                            className="form-input" 
-                            placeholder="ejemplo@gmail.com" 
-                            value={email} 
-                            onChange={(e) => setEmail(e.target.value)}
-                            required 
-                        />
-                    </div>
-                    <div className="form-group">
-                        <label className="form-label">Contraseña</label>
-                        <input 
-                            type="password" 
-                            className="form-input" 
-                            placeholder="••••••••" 
-                            value={password} 
-                            onChange={(e) => setPassword(e.target.value)}
-                            required 
-                        />
-                    </div>
-                    <button type="submit" className="btn-login">Iniciar Sesión</button>
-                </form>
+
+                {view === 'login' && (
+                    <form className="login-form" onSubmit={handleLogin}>
+                        <div className="form-group">
+                            <label className="form-label">Email / Gmail</label>
+                            <input 
+                                type="email" 
+                                className="form-input" 
+                                placeholder="ejemplo@gmail.com" 
+                                value={email} 
+                                onChange={(e) => setEmail(e.target.value)}
+                                required 
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">Contraseña</label>
+                            <input 
+                                type="password" 
+                                className="form-input" 
+                                placeholder="••••••••" 
+                                value={password} 
+                                onChange={(e) => setPassword(e.target.value)}
+                                required 
+                            />
+                        </div>
+                        <button type="submit" className="btn-login" disabled={loading}>
+                            {loading ? 'Cargando...' : 'Iniciar Sesión'}
+                        </button>
+                        <div style={{ marginTop: 20, textAlign: 'center', fontSize: '0.9rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <a href="#" style={{ color: 'var(--accent)' }} onClick={(e) => { e.preventDefault(); setView('reset'); }}>¿Olvidaste tu contraseña?</a>
+                            <span style={{ color: 'var(--muted)' }}>¿No tienes cuenta? <a href="#" style={{ color: 'var(--accent)' }} onClick={(e) => { e.preventDefault(); setView('signup'); }}>Regístrate aquí</a></span>
+                        </div>
+                    </form>
+                )}
+
+                {view === 'signup' && (
+                    <form className="login-form" onSubmit={handleSignUp}>
+                        <div className="form-group">
+                            <label className="form-label">Nombre Completo</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                placeholder="Ej: Mauri"
+                                value={nombre}
+                                onChange={(e) => setNombre(e.target.value)}
+                                required
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">Email / Gmail</label>
+                            <input 
+                                type="email" 
+                                className="form-input" 
+                                placeholder="ejemplo@gmail.com" 
+                                value={email} 
+                                onChange={(e) => setEmail(e.target.value)}
+                                required 
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">Contraseña</label>
+                            <input 
+                                type="password" 
+                                className="form-input" 
+                                placeholder="Mínimo 6 caracteres" 
+                                value={password} 
+                                onChange={(e) => setPassword(e.target.value)}
+                                minLength={6}
+                                required 
+                            />
+                        </div>
+                        <button type="submit" className="btn-login" disabled={loading}>
+                            {loading ? 'Registrando...' : 'Crear Cuenta'}
+                        </button>
+                        <div style={{ marginTop: 20, textAlign: 'center', fontSize: '0.9rem' }}>
+                            <span style={{ color: 'var(--muted)' }}>¿Ya tienes cuenta? <a href="#" style={{ color: 'var(--accent)' }} onClick={(e) => { e.preventDefault(); setView('login'); }}>Inicia sesión</a></span>
+                        </div>
+                    </form>
+                )}
+
+                {view === 'reset' && (
+                    <form className="login-form" onSubmit={handleReset}>
+                        <div className="form-group">
+                            <label className="form-label">Tu Email</label>
+                            <input 
+                                type="email" 
+                                className="form-input" 
+                                placeholder="ejemplo@gmail.com" 
+                                value={email} 
+                                onChange={(e) => setEmail(e.target.value)}
+                                required 
+                            />
+                        </div>
+                        <button type="submit" className="btn-login" disabled={loading}>
+                            {loading ? 'Enviando...' : 'Enviar Link de Recuperación'}
+                        </button>
+                        <div style={{ marginTop: 20, textAlign: 'center', fontSize: '0.9rem' }}>
+                            <a href="#" style={{ color: 'var(--accent)' }} onClick={(e) => { e.preventDefault(); setView('login'); }}>Volver al Login</a>
+                        </div>
+                    </form>
+                )}
             </div>
         </div>
     );
@@ -86,14 +216,12 @@ function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
 // APP
 // ═══════════════════════════════════════════════════════
 export default function App() {
-    const [currentUser, setCurrentUser] = useState<User | null>(() => {
-        const saved = localStorage.getItem('pos_user');
-        return saved ? JSON.parse(saved) : null;
-    });
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [tab, setTab] = useState<Tab>('pos');
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [showSuccess, setShowSuccess] = useState(false);
     const [refresh, setRefresh] = useState(0);
+    const [syncing, setSyncing] = useState(false);
 
     const addToast = useCallback((msg: string, type: ToastType = 'success') => {
         const id = Date.now();
@@ -108,26 +236,72 @@ export default function App() {
 
     const forceRefresh = useCallback(() => setRefresh((r) => r + 1), []);
 
+    // Manejar sesión de Supabase
+    useEffect(() => {
+        const checkSession = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user) {
+                setCurrentUser({ 
+                    email: session.user.email!, 
+                    name: session.user.user_metadata?.full_name || session.user.email!.split('@')[0] 
+                });
+            }
+        };
+
+        checkSession();
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            if (session?.user) {
+                setCurrentUser({ 
+                    email: session.user.email!, 
+                    name: session.user.user_metadata?.full_name || session.user.email!.split('@')[0] 
+                });
+            } else {
+                setCurrentUser(null);
+            }
+        });
+
+        return () => subscription.unsubscribe();
+    }, []);
+
+    // Inicializar datos desde la nube en segundo plano (sin bloquear la UI)
+    useEffect(() => {
+        if (!currentUser) return;
+        const init = async () => {
+            try {
+                setSyncing(true);
+                await syncFromCloud();
+                // Forzar re-render después de sincronizar
+                setRefresh((r) => r + 1);
+            } catch (error) {
+                addToast('❌ Error al sincronizar con la nube', 'error');
+            } finally {
+                setSyncing(false);
+            }
+        };
+        init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [addToast, currentUser]);
+
     const now = new Date();
     const dateStr = now.toLocaleDateString('es-AR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-    const handleLogout = () => {
-        localStorage.removeItem('pos_user');
+    const handleLogout = async () => {
+        await supabase.auth.signOut();
         setCurrentUser(null);
     };
 
     if (!currentUser) {
-        return <LoginScreen onLogin={setCurrentUser} />;
+        return <LoginScreen onLogin={setCurrentUser} addToast={addToast} />;
     }
 
     return (
-        <>
+        <div className="layout">
             <div className="topbar">
-                <div className="logo">
-                    <span className="logo-icon">🐾</span>
-                    <div>
-                        FJ <span style={{ color: 'var(--accent)', opacity: 1 }}>Mascotas</span>
-                        <span>Tienda de alimentos y accesorios</span>
+                <div className="logo" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <img src="logo.png" alt="" style={{ maxHeight: '35px', borderRadius: '6px', display: 'block' }} onError={(e) => (e.currentTarget.style.display = 'none')} />
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, letterSpacing: '0.5px' }}>
+                        FJ <span style={{ color: 'var(--accent)' }}>MASCOTAS</span>
                     </div>
                 </div>
                 <div className="nav-tabs">
@@ -137,12 +311,14 @@ export default function App() {
                         ['clientes', '👥', 'Clientes'], 
                         ['inventory', '📦', 'Inventario'], 
                         ['ordenes', '📝', 'Órdenes'], 
-                        ['report', '📊', 'Diario'], 
-                        ['weekly', '📅', 'Semanal'], 
-                        ['informes', '📈', 'Informes'], 
-                        ['facturas', '🧾', 'Facturas']
-                    ] as const).map(([id, icon, label]) => (
-                        <button key={id} className={`nav-tab${tab === id ? ' active' : ''}`} onClick={() => setTab(id as Tab)}>
+                        ['analitica', '📊', 'Analítica'], 
+                        ['facturas', '🧾', 'Facturas'],
+                        ['auditoria', '🔍', 'Auditoría']
+                    ] as const).filter(([id]) => {
+                        if (id === 'analitica' || id === 'auditoria') return isAdmin(currentUser);
+                        return true;
+                    }).map(([id, icon, label]) => (
+                        <button key={id} className={`nav-tab${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>
                             <span className="tab-icon">{icon}</span>{label}
                         </button>
                     ))}
@@ -151,7 +327,9 @@ export default function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.03)', padding: '4px 12px', borderRadius: '12px', border: '1px solid var(--border)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                             <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent)' }}>{currentUser.name}</span>
-                            <span style={{ fontSize: '0.65rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sesión iniciada</span>
+                            <span style={{ fontSize: '0.65rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                {syncing ? '🔄 Sincronizando...' : 'Sesión iniciada'}
+                            </span>
                         </div>
                         <button className="btn-logout" style={{ padding: '6px 10px', fontSize: '0.75rem' }} onClick={handleLogout}>Cerrar Sesión</button>
                     </div>
@@ -172,9 +350,8 @@ export default function App() {
                 {tab === 'inventory' && (
                     <InventoryScreen key={refresh} addToast={addToast} onRefresh={forceRefresh} />
                 )}
-                {tab === 'report' && <ReportScreen key={refresh} />}
-                {tab === 'weekly' && <WeeklyReportScreen key={refresh} />}
-                {tab === 'informes' && <InformesScreen key={refresh} />}
+                {tab === 'analitica' && isAdmin(currentUser) && <AnaliticaScreen key={refresh} />}
+                {tab === 'auditoria' && isAdmin(currentUser) && <AuditoriaScreen key={refresh} />}
                 {tab === 'facturas' && <FacturasScreen key={refresh} addToast={addToast} userName={currentUser.name} />}
                 {tab === 'pedidos' && <PedidosScreen key={refresh} addToast={addToast} />}
                 {tab === 'clientes' && <ClientesScreen key={refresh} addToast={addToast} />}
@@ -194,9 +371,10 @@ export default function App() {
                     <div className="success-icon">✅</div>
                 </div>
             )}
-        </>
+        </div>
     );
 }
+
 
 // ═══════════════════════════════════════════════════════
 // POS SCREEN
@@ -206,6 +384,7 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
     flashSuccess: () => void;
     onSaleComplete: () => void;
 }) {
+    const BANCOS_CHILE = ['Banco de Chile', 'Banco Estado', 'BCI', 'Santander', 'Itaú', 'Scotiabank', 'Banco Falabella', 'Banco Ripley', 'Tenpo', 'Mach', 'Otro'];
     const [carrito, setCarrito] = useState<ItemCarrito[]>([]);
     const [query, setQuery] = useState('');
     const [especieFilter, setEspecieFilter] = useState('Todos');
@@ -213,6 +392,7 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
     const [tipoGranelFilter, setTipoGranelFilter] = useState<'Todos' | 'Suelto' | 'Saco'>('Todos');
     const [sortBy, setSortBy] = useState<'nombre' | 'precio_asc' | 'precio_desc' | 'peso_asc' | 'peso_desc'>('nombre');
     const [metodo, setMetodo] = useState<MetodoPago>(MetodoPago.Efectivo);
+    const [banco, setBanco] = useState('');
     const [granelModal, setGranelModal] = useState<Producto | null>(null);
     const [pedidoModal, setPedidoModal] = useState(false);
 
@@ -270,7 +450,7 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
         });
     };
 
-    const changeQty = (id: number, delta: number) => {
+    const changeQty = (id: string, delta: number) => {
         setCarrito((prev) => {
             const prod = getProducto(id);
             return prev
@@ -284,10 +464,15 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
         });
     };
 
-    const handleCheckout = () => {
-        const result = checkout(carrito, metodo);
+    const handleCheckout = async () => {
+        if ((metodo === MetodoPago.Transferencia || metodo === MetodoPago.Tarjeta) && !banco) {
+            addToast('⚠️ Por favor seleccione un banco', 'error');
+            return;
+        }
+        const result = await checkout(carrito, metodo, banco);
         if (!result.ok) { addToast(`❌ ${result.error}`, 'error'); return; }
         setCarrito([]);
+        setBanco('');
         flashSuccess();
         addToast(`✅ Venta #${result.ventaId} registrada — ${fmtMoney(result.total!)}`, 'success');
         onSaleComplete();
@@ -468,9 +653,19 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
 
                 <hr className="cart-divider" />
 
-                <div className="cart-total-row">
-                    <span className="total-label">Total</span>
-                    <span className="total-amount">{fmtMoney(total)}</span>
+                <div className="cart-total-row" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '0.9rem', color: 'var(--muted)' }}>
+                        <span>Total Neto</span>
+                        <span>{fmtMoney(total)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '0.9rem', color: 'var(--muted)', borderBottom: '1px solid var(--border)', paddingBottom: '4px', marginBottom: '4px' }}>
+                        <span>IVA (19%)</span>
+                        <span>{fmtMoney(total * 0.19)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                        <span className="total-label">Total con IVA</span>
+                        <span className="total-amount" style={{ color: 'var(--accent)' }}>{fmtMoney(total * 1.19)}</span>
+                    </div>
                 </div>
 
                 <div>
@@ -489,6 +684,21 @@ function POSScreen({ addToast, flashSuccess, onSaleComplete }: {
                             );
                         })}
                     </div>
+                    
+                    {(metodo === MetodoPago.Transferencia || metodo === MetodoPago.Tarjeta) && (
+                        <div style={{ marginTop: '12px' }}>
+                            <div className="payment-label">Banco</div>
+                            <select 
+                                className="form-input" 
+                                value={banco} 
+                                onChange={(e) => setBanco(e.target.value)}
+                                style={{ width: '100%', padding: '10px' }}
+                            >
+                                <option value="">-- Seleccionar Banco --</option>
+                                {BANCOS_CHILE.map(b => <option key={b} value={b}>{b}</option>)}
+                            </select>
+                        </div>
+                    )}
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -686,18 +896,18 @@ function InventoryScreen({ addToast, onRefresh }: {
             }
         });
 
-    const handleStockSave = () => {
+    const handleStockSave = async () => {
         const qty = parseInt(stockQty);
         if (!stockModal || !qty || qty <= 0) { addToast('⚠️ Ingresá una cantidad válida', 'error'); return; }
-        cargarStock(stockModal.id, qty, stockNote || 'Carga manual');
+        await cargarStock(stockModal.id, qty, stockNote || 'Carga manual');
         addToast(`✅ +${qty} unidades agregadas a ${stockModal.nombre}`, 'success');
         setStockModal(null); setStockQty(''); setStockNote('');
         setTick((t) => t + 1); onRefresh();
     };
 
-    const handleAbrirSaco = (p: Producto) => {
+    const handleAbrirSaco = async (p: Producto) => {
         if (!confirm(`¿Estás seguro que deseas abrir 1 saco de ${p.nombre}?`)) return;
-        const res = abrirSaco(p.id);
+        const res = await abrirSaco(p.id);
         if (!res.ok) {
             addToast(`❌ Error: ${res.error}`, 'error');
         } else {
@@ -912,7 +1122,7 @@ function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
     });
     const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }));
 
-    const save = () => {
+    const save = async () => {
         if (!form.nombre.trim() || !form.pventa) { addToast('⚠️ Nombre y precio son obligatorios', 'error'); return; }
         
         const prodData = {
@@ -928,15 +1138,15 @@ function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
             imagen: form.imagen.trim() || undefined,
             peso_kg: form.peso_kg ? parseFloat(form.peso_kg) : undefined,
             venta_a_granel: form.venta_a_granel || undefined,
-            id_producto_suelto: form.id_producto_suelto ? parseInt(form.id_producto_suelto) : undefined,
+            id_producto_suelto: form.id_producto_suelto || undefined,
             kilos_por_saco: form.kilos_por_saco ? parseFloat(form.kilos_por_saco) : undefined,
         };
 
         if (isEdit) {
-            editarProducto(productoToEdit!.id, prodData);
+            await editarProducto(productoToEdit!.id, prodData as any);
             addToast(`✅ Producto "${form.nombre}" actualizado`, 'success');
         } else {
-            agregarProducto(prodData);
+            await agregarProducto(prodData as any);
             addToast(`✅ Producto "${form.nombre}" agregado`, 'success');
         }
 
@@ -1067,6 +1277,116 @@ function ProductModal({ productoToEdit, onClose, addToast, onSave }: {
                     <button className="btn-secondary" onClick={onClose}>Cancelar</button>
                     <button className="btn-primary" onClick={save}>✅ Guardar Producto</button>
                 </div>
+            </div>
+        </div>
+    );
+}
+
+// ═══════════════════════════════════════════════════════
+// ANALÍTICA CONSOLIDADA
+// ═══════════════════════════════════════════════════════
+function AnaliticaScreen() {
+    const [subTab, setSubTab] = useState<'diario' | 'semanal' | 'mensual'>('diario');
+
+    return (
+        <div className="analitica-screen" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div className="sub-navigation" style={{ display: 'flex', gap: '8px', background: 'var(--surface)', padding: '6px', borderRadius: '12px', border: '1px solid var(--border)', alignSelf: 'flex-start' }}>
+                <button 
+                    className={`nav-tab ${subTab === 'diario' ? 'active' : ''}`} 
+                    onClick={() => setSubTab('diario')}
+                    style={{ padding: '8px 16px', fontSize: '0.9rem' }}
+                >📅 Diario</button>
+                <button 
+                    className={`nav-tab ${subTab === 'semanal' ? 'active' : ''}`} 
+                    onClick={() => setSubTab('semanal')}
+                    style={{ padding: '8px 16px', fontSize: '0.9rem' }}
+                >📊 Semanal</button>
+                <button 
+                    className={`nav-tab ${subTab === 'mensual' ? 'active' : ''}`} 
+                    onClick={() => setSubTab('mensual')}
+                    style={{ padding: '8px 16px', fontSize: '0.9rem' }}
+                >📈 Histórico / Mensual</button>
+            </div>
+
+            {subTab === 'diario' && <ReportScreen />}
+            {subTab === 'semanal' && <WeeklyReportScreen />}
+            {subTab === 'mensual' && <InformesScreen />}
+        </div>
+    );
+}
+
+// ═══════════════════════════════════════════════════════
+// AUDITORIA SCREEN
+// ═══════════════════════════════════════════════════════
+function AuditoriaScreen() {
+    const logs = db.auditoria;
+    const [filtroModulo, setFiltroModulo] = useState('Todos');
+    
+    const modulos = ['Todos', ...Array.from(new Set(logs.map(l => l.modulo)))];
+    const filtrados = filtroModulo === 'Todos' ? logs : logs.filter(l => l.modulo === filtroModulo);
+
+    return (
+        <div className="report-screen">
+            <div className="screen-header">
+                <div>
+                    <div className="screen-title">🔍 Historial de Auditoría</div>
+                    <div style={{ color: 'var(--muted)' }}>Seguimiento de acciones y cambios en el sistema</div>
+                </div>
+                <div className="date-filter-group">
+                    <select 
+                        className="date-input" 
+                        value={filtroModulo} 
+                        onChange={(e) => setFiltroModulo(e.target.value)}
+                        style={{ padding: '8px 12px', borderRadius: '8px', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                    >
+                        {modulos.map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                </div>
+            </div>
+
+            <div className="table-wrap" style={{ marginTop: 20 }}>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style={{ width: '180px' }}>Fecha</th>
+                            <th style={{ width: '150px' }}>Usuario</th>
+                            <th style={{ width: '120px' }}>Módulo</th>
+                            <th style={{ width: '250px' }}>Acción</th>
+                            <th>Detalle</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filtrados.length === 0 ? (
+                            <tr>
+                                <td colSpan={5} style={{ textAlign: 'center', padding: '40px', color: 'var(--muted)' }}>
+                                    No hay registros de auditoría para mostrar.
+                                </td>
+                            </tr>
+                        ) : (
+                            filtrados.map(log => (
+                                <tr key={log.id}>
+                                    <td style={{ fontSize: '0.85rem' }}>{new Date(log.fecha).toLocaleString('es-AR')}</td>
+                                    <td>
+                                        <span className="pill" style={{ background: 'rgba(129,140,248,0.1)', color: 'var(--accent)', border: '1px solid rgba(129,140,248,0.2)' }}>
+                                            {log.usuario}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span className={`estado-badge ${
+                                            log.modulo === 'Ventas' ? 'success' : 
+                                            log.modulo === 'Inventario' ? 'warn' : 
+                                            log.modulo === 'Facturas' ? 'info' : 'primary'
+                                        }`}>
+                                            {log.modulo}
+                                        </span>
+                                    </td>
+                                    <td style={{ fontWeight: 500 }}>{log.accion}</td>
+                                    <td style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>{log.detalle}</td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
             </div>
         </div>
     );
@@ -1278,7 +1598,7 @@ function WeeklyReportScreen() {
                                     <td style={{ color: dia.totalVentas > 0 ? 'var(--accent)' : 'var(--muted)' }}>
                                         {dia.totalVentas > 0 ? fmtMoney(dia.totalVentas) : '—'}
                                     </td>
-                                    <td>{dia.cantidadVentas || '—'}</td>
+                                    <td>{dia.cantidadVentas}</td>
                                     <td style={{ color: 'var(--muted)' }}>{dia.porMetodo.Efectivo.total > 0 ? fmtMoney(dia.porMetodo.Efectivo.total) : '—'}</td>
                                     <td style={{ color: 'var(--muted)' }}>{dia.porMetodo.Transferencia.total > 0 ? fmtMoney(dia.porMetodo.Transferencia.total) : '—'}</td>
                                     <td style={{ color: 'var(--muted)' }}>{dia.porMetodo.Tarjeta.total > 0 ? fmtMoney(dia.porMetodo.Tarjeta.total) : '—'}</td>
@@ -1306,9 +1626,10 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
     const [query, setQuery] = useState('');
     const [modal, setModal] = useState<Factura | 'NUEVA' | null>(null);
     const [detalle, setDetalle] = useState<Factura | null>(null);
-    const [confirmDeshacerId, setConfirmDeshacerID] = useState<number | null>(null);
-    const [confirmAnularId, setConfirmAnularId] = useState<number | null>(null);
-    const [confirmReactivarId, setConfirmReactivarId] = useState<number | null>(null);
+    const [confirmDeshacerId, setConfirmDeshacerID] = useState<string | null>(null);
+    const [confirmAnularId, setConfirmAnularId] = useState<string | null>(null);
+    const [confirmReactivarId, setConfirmReactivarId] = useState<string | null>(null);
+    const [confirmEliminarId, setConfirmEliminarId] = useState<string | null>(null);
     const [facturaPendientePago, setFacturaPendientePago] = useState<Factura | null>(null);
     const [sortBy, setSortBy] = useState<'fecha_desc' | 'fecha_asc' | 'monto_desc' | 'monto_asc' | 'numero'>('fecha_desc');
     const [montoMin, setMontoMin] = useState('');
@@ -1340,18 +1661,18 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
             const da = new Date(a.fecha_emision).getTime();
             const db2 = new Date(b.fecha_emision).getTime();
             if (db2 !== da) return db2 - da;
-            return b.id - a.id;
+            return b.id.localeCompare(a.id);
         }
         if (sortBy === 'fecha_asc') {
             const da = new Date(a.fecha_emision).getTime();
             const db2 = new Date(b.fecha_emision).getTime();
             if (da !== db2) return da - db2;
-            return a.id - b.id;
+            return a.id.localeCompare(b.id);
         }
         if (sortBy === 'monto_desc') return b.monto_total - a.monto_total;
         if (sortBy === 'monto_asc') return a.monto_total - b.monto_total;
         if (sortBy === 'numero') return a.numero.localeCompare(b.numero);
-        return b.id - a.id;
+        return b.id.localeCompare(a.id);
     });
 
     const ESTADO_CONFIG: Record<EstadoFactura, { color: string; icon: string }> = {
@@ -1369,9 +1690,13 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
         setConfirmDeshacerID(f.id);
     };
 
-    const confirmarDeshacerPago = (f: Factura) => {
-        cancelarPago(f.id, userName);
-        addToast(`🔄 Factura ${f.numero} revertida a Por Pagar`, 'success');
+    const confirmarDeshacerPago = async (f: Factura) => {
+        const ok = await cancelarPago(f.id, userName);
+        if (ok) {
+            addToast(`🔄 Factura ${f.numero} revertida a Por Pagar`, 'success');
+        } else {
+            addToast(`❌ Error al revertir factura ${f.numero}`, 'error');
+        }
         setConfirmDeshacerID(null);
         refresh();
     };
@@ -1380,9 +1705,13 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
         setConfirmAnularId(f.id);
     };
 
-    const confirmarAnular = (f: Factura) => {
-        actualizarEstadoFactura(f.id, EstadoFactura.Anulada, userName);
-        addToast(`🚫 Factura ${f.numero} anulada`, 'success');
+    const confirmarAnular = async (f: Factura) => {
+        const ok = await actualizarEstadoFactura(f.id, EstadoFactura.Anulada, userName);
+        if (ok) {
+            addToast(`🚫 Factura ${f.numero} anulada`, 'success');
+        } else {
+            addToast(`❌ Error al anular factura ${f.numero}`, 'error');
+        }
         setConfirmAnularId(null);
         refresh();
     };
@@ -1391,11 +1720,31 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
         setConfirmReactivarId(f.id);
     };
 
-    const confirmarReactivar = (f: Factura) => {
-        reactivarFactura(f.id, userName);
-        addToast(`↩️ Factura ${f.numero} reactivada a Por Pagar`, 'success');
+    const confirmarReactivar = async (f: Factura) => {
+        const ok = await reactivarFactura(f.id, userName);
+        if (ok) {
+            addToast(`↩️ Factura ${f.numero} reactivada a Por Pagar`, 'success');
+        } else {
+            addToast(`❌ Error al reactivar factura ${f.numero}`, 'error');
+        }
         setConfirmReactivarId(null);
         refresh();
+    };
+
+    const handleEliminar = (f: Factura) => {
+        setConfirmEliminarId(f.id);
+    };
+
+    const confirmarEliminar = async (f: Factura) => {
+        try {
+            await eliminarFactura(f.id);
+            addToast(`🗑️ Factura ${f.numero} eliminada`, 'success');
+        } catch (err: any) {
+            addToast(`❌ Error al eliminar: ${err.message}`, 'error');
+        } finally {
+            setConfirmEliminarId(null);
+            refresh();
+        }
     };
 
     const fmtDate = (iso: string) => {
@@ -1433,7 +1782,10 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
     return (
         <div className="fact-screen">
             <div className="screen-header" style={{ flexShrink: 0, marginBottom: 16 }}>
-                <div className="screen-title">🧾 Facturas</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div className="screen-title">🧾 Facturas</div>
+                    <button className="btn-secondary" title="Refrescar datos" onClick={async () => { await syncFromCloud(); refresh(); }}>🔄</button>
+                </div>
                 <button className="btn-primary" onClick={() => setModal('NUEVA')}>➕ Nueva Factura</button>
             </div>
 
@@ -1583,6 +1935,16 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
                                             )}
                                             <button className="btn-xs" onClick={() => setModal(f)}>✏️ Editar</button>
                                             <button className="btn-xs" onClick={() => setDetalle(f)}>👁 Ver</button>
+                                            {/* Eliminar con confirmación */}
+                                            {confirmEliminarId === f.id ? (
+                                                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                    <span style={{ fontSize: '0.75rem', color: 'var(--danger)', marginRight: 2 }}>¿Eliminar?</span>
+                                                    <button className="btn-xs btn-danger" onClick={() => confirmarEliminar(f)}>Sí</button>
+                                                    <button className="btn-xs" onClick={() => setConfirmEliminarId(null)}>No</button>
+                                                </span>
+                                            ) : (
+                                                <button className="btn-xs btn-danger" style={{ opacity: 0.7 }} onClick={() => handleEliminar(f)}>🗑️ Eliminar</button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>
@@ -1597,9 +1959,13 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
                 <PagoModal
                     factura={facturaPendientePago}
                     onClose={() => setFacturaPendientePago(null)}
-                    onConfirm={(metodo) => {
-                        pagarFactura(facturaPendientePago.id, metodo, '', new Date().toISOString(), userName);
-                        addToast(`✅ Factura ${facturaPendientePago.numero} pagada con ${metodo}`, 'success');
+                    onConfirm={async (metodo, banco, fecha) => {
+                        const ok = await pagarFactura(facturaPendientePago.id, metodo, banco, userName, fecha, userName);
+                        if (ok) {
+                            addToast(`✅ Factura ${facturaPendientePago.numero} pagada (${metodo}${banco ? ` - ${banco}` : ''})`, 'success');
+                        } else {
+                            addToast(`❌ Error al registrar pago de factura ${facturaPendientePago.numero}`, 'error');
+                        }
                         setFacturaPendientePago(null);
                         refresh();
                     }}
@@ -1625,11 +1991,12 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
                                 <div className="detalle-item"><span>Estado</span>
                                     <span className={`estado-badge ${ESTADO_CONFIG[detalle.estado].color}`}>{ESTADO_CONFIG[detalle.estado].icon} {detalle.estado}</span>
                                 </div>
-                                {detalle.metodo_pago_final && (
+                                {detalle.metodo_pago && (
                                     <div className="detalle-item">
                                         <span>Método de Pago</span>
                                         <strong>
-                                            {detalle.metodo_pago_final === 'Efectivo' ? '💵' : detalle.metodo_pago_final === 'Transferencia' ? '🏦' : '💳'} {detalle.metodo_pago_final}
+                                            {detalle.metodo_pago === 'Efectivo' ? '💵' : detalle.metodo_pago === 'Transferencia' ? '🏦' : '💳'} {detalle.metodo_pago}
+                                            {detalle.banco && ` — ${detalle.banco}`}
                                         </strong>
                                     </div>
                                 )}
@@ -1637,6 +2004,22 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
                                     <div className="detalle-item">
                                         <span>Fecha de Pago</span>
                                         <strong>{fmtDate(detalle.fecha_pago)}</strong>
+                                    </div>
+                                )}
+                                {detalle.registrado_por && (
+                                    <div className="detalle-item">
+                                        <span>Creado por</span>
+                                        <strong style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <span style={{ fontSize: '1.2rem' }}>👤</span> {detalle.registrado_por}
+                                        </strong>
+                                    </div>
+                                )}
+                                {detalle.pagado_por && (
+                                    <div className="detalle-item">
+                                        <span>Pagado por</span>
+                                        <strong style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--success)' }}>
+                                            <span style={{ fontSize: '1.2rem' }}>✅</span> {detalle.pagado_por}
+                                        </strong>
                                     </div>
                                 )}
                                 {detalle.notas && <div className="detalle-item full"><span>Notas</span><strong>{detalle.notas}</strong></div>}
@@ -1683,7 +2066,6 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
                                             {[...detalle.historial].reverse().map((log, i) => {
                                                 const d = new Date(log.fecha);
                                                 const dateStr = d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-                                                const timeStr = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
                                                 return (
                                                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: '0.82rem', gap: 8 }}>
                                                         <span style={{ color: 'var(--fg)', flex: 1 }}>
@@ -1698,7 +2080,7 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
                                                                     👤 {log.usuario}
                                                                 </span>
                                                             )}
-                                                            <span style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>{dateStr} {timeStr}</span>
+                                                            <span style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>{dateStr}</span>
                                                         </span>
                                                     </div>
                                                 );
@@ -1722,8 +2104,13 @@ function FacturasScreen({ addToast, userName }: { addToast: (m: string, t: Toast
 function PagoModal({ factura, onClose, onConfirm }: {
     factura: Factura;
     onClose: () => void;
-    onConfirm: (metodo: string) => void;
+    onConfirm: (metodo: string, banco: string, fecha: string) => void;
 }) {
+    const BANCOS_CHILE = ['Banco de Chile', 'Banco Estado', 'BCI', 'Santander', 'Itaú', 'Scotiabank', 'Banco Falabella', 'Banco Ripley', 'Tenpo', 'Mach', 'Otro'];
+    const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
+    const [metodo, setMetodo] = useState('Efectivo');
+    const [banco, setBanco] = useState('');
+
     const metodos: { label: string; icon: string; value: string }[] = [
         { label: 'Efectivo', icon: '💵', value: 'Efectivo' },
         { label: 'Transferencia', icon: '🏦', value: 'Transferencia' },
@@ -1733,31 +2120,77 @@ function PagoModal({ factura, onClose, onConfirm }: {
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
             <div className="modal" style={{ width: 420 }}>
                 <div className="modal-title">✅ Registrar Pago</div>
-                <div className="modal-body" style={{ textAlign: 'center' }}>
-                    <div style={{ marginBottom: 8, color: 'var(--muted)', fontSize: '0.9rem' }}>Factura <strong>{factura.numero}</strong> — {fmtMoney(factura.monto_total)}</div>
-                    <div style={{ marginBottom: 20, color: 'var(--muted)', fontSize: '0.85rem' }}>Seleccioná el método de pago:</div>
-                    <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <div className="modal-body">
+                    <div style={{ marginBottom: 16, color: 'var(--muted)', fontSize: '0.9rem', textAlign: 'center' }}>
+                        Factura <strong>{factura.numero}</strong> — {fmtMoney(factura.monto_total)}
+                    </div>
+                    
+                    <div className="form-group">
+                        <div className="form-label">Fecha de Pago</div>
+                        <input 
+                            type="date" 
+                            className="form-input" 
+                            value={fecha} 
+                            onChange={(e) => setFecha(e.target.value)} 
+                        />
+                    </div>
+
+                    <div className="form-label" style={{ marginTop: 16, marginBottom: 8 }}>Método de Pago</div>
+                    <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 16 }}>
                         {metodos.map(m => (
                             <button
                                 key={m.value}
-                                onClick={() => onConfirm(m.value)}
+                                onClick={() => {
+                                    setMetodo(m.value);
+                                    if (m.value === 'Efectivo') setBanco('');
+                                }}
                                 style={{
                                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-                                    padding: '18px 24px', border: '2px solid var(--border)', borderRadius: 12,
-                                    background: 'var(--surface)', cursor: 'pointer', transition: 'all 0.15s',
-                                    color: 'var(--fg)', fontSize: '0.9rem', fontWeight: 600,
+                                    padding: '14px 18px', border: '2px solid', 
+                                    borderColor: metodo === m.value ? 'var(--accent)' : 'var(--border)',
+                                    borderRadius: 12,
+                                    background: metodo === m.value ? 'rgba(99,102,241,0.1)' : 'var(--surface)', 
+                                    cursor: 'pointer', transition: 'all 0.15s',
+                                    color: 'var(--fg)', fontSize: '0.85rem', fontWeight: 600,
+                                    flex: 1
                                 }}
-                                onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--accent)', e.currentTarget.style.background = 'rgba(99,102,241,0.12)')}
-                                onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)', e.currentTarget.style.background = 'var(--surface)')}
                             >
-                                <span style={{ fontSize: '2rem' }}>{m.icon}</span>
+                                <span style={{ fontSize: '1.5rem' }}>{m.icon}</span>
                                 <span>{m.label}</span>
                             </button>
                         ))}
                     </div>
+
+                    {(metodo === 'Transferencia' || metodo === 'Tarjeta') && (
+                        <div className="form-group anim-fade-in">
+                            <div className="form-label">Banco / Entidad</div>
+                            <input 
+                                className="form-input" 
+                                list="bancos-chile-list"
+                                placeholder="Ej: Banco Estado, Santander, Mercado Pago..."
+                                value={banco} 
+                                onChange={(e) => setBanco(e.target.value)}
+                            />
+                            <datalist id="bancos-chile-list">
+                                {BANCOS_CHILE.map(b => <option key={b} value={b} />)}
+                            </datalist>
+                        </div>
+                    )}
                 </div>
                 <div className="modal-actions">
                     <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+                    <button 
+                        className="btn-primary" 
+                        onClick={() => {
+                            if ((metodo === 'Transferencia' || metodo === 'Tarjeta') && !banco) {
+                                alert('Por favor seleccione un banco');
+                                return;
+                            }
+                            onConfirm(metodo, banco, fecha);
+                        }}
+                    >
+                        ✅ Confirmar Pago
+                    </button>
                 </div>
             </div>
         </div>
@@ -1781,6 +2214,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
         fecha_emision: editItem?.fecha_emision || today, 
         fecha_vencimiento: editItem?.fecha_vencimiento || '', 
         notas: editItem?.notas || '',
+        descuento_global: editItem?.descuento_global?.toString() || '',
     });
     const [items, setItems] = useState<ItemFactura[]>(
         editItem?.items?.length ? editItem.items : []
@@ -1803,7 +2237,9 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
     const productSuggestions = Array.from(new Set([
         ...db.productos.map((p: Producto) => p.nombre),
         ...getFacturas().flatMap((f: Factura) => f.items?.map((it: ItemFactura) => it.concepto) || [])
-    ])).slice(0, 8);
+    ]))
+    .filter(name => name.toUpperCase() !== 'IVA')
+    .slice(0, 8);
 
     const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
         setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -1822,54 +2258,77 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
     };
 
     // Total calculado desde ítems (o manual si no hay ítems)
-    const totalDesdeItems = items.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
     const tieneItems = items.length > 0;
+    const subtotalNeto = tieneItems 
+        ? items.reduce((s, it) => s + (it.cantidad * it.precio_unitario) - (it.descuento || 0), 0)
+        : (parseFloat(form.monto_total) || 0);
+    const descuentoGlobal = parseFloat(form.descuento_global) || 0;
+    const valorNeto = subtotalNeto - descuentoGlobal;
+    const iva = Math.round(valorNeto * 0.19);
+    const totalConIva = valorNeto + iva;
 
-    const addItem = () => setItems(prev => [...prev, { id: Date.now(), concepto: '', cantidad: 1, precio_unitario: 0 }]);
-    const removeItem = (id: number) => setItems(prev => prev.filter(it => it.id !== id));
-    const updateItem = (id: number, field: keyof ItemFactura, value: string | number) =>
-        setItems(prev => prev.map(it => it.id === id ? { ...it, [field]: typeof value === 'string' ? value : Number(value) } : it));
+    const addItem = () => setItems(prev => [...prev, { id: crypto.randomUUID(), concepto: '', cantidad: 1, precio_unitario: 0, descuento: undefined }]);
+    const removeItem = (id: string) => setItems(prev => prev.filter(it => it.id !== id));
+    const updateItem = (id: string, field: keyof ItemFactura, value: string | number | undefined) =>
+        setItems(prev => prev.map(it => it.id === id ? { ...it, [field]: (typeof value === 'string' && field !== 'id' && field !== 'concepto') ? Number(value) : value } : it));
 
-    const save = () => {
+    const [saving, setSaving] = useState(false);
+
+    const save = async () => {
         if (!form.proveedor_cliente.trim()) { addToast('⚠️ Ingresar proveedor/cliente', 'error'); return; }
-        if (!tieneItems && (!form.monto_total || parseFloat(form.monto_total) <= 0)) { addToast('⚠️ Agregá ítems o ingresá un monto', 'error'); return; }
+        
+        if (!tieneItems && subtotalNeto <= 0) { addToast('⚠️ Agregá ítems o ingresá un monto', 'error'); return; }
         if (!form.fecha_vencimiento) { addToast('⚠️ Ingresar fecha de vencimiento', 'error'); return; }
         if (tieneItems && items.some(it => !it.concepto.trim())) { addToast('⚠️ Todos los ítems deben tener un concepto', 'error'); return; }
 
-        const montoFinal = tieneItems ? totalDesdeItems : parseFloat(form.monto_total);
-        const data = {
-            numero: form.numero.trim() || numAuto,
-            tipo: 'Compra' as TipoFactura,
-            proveedor_cliente: form.proveedor_cliente.trim(),
-            descripcion: form.descripcion.trim(),
-            monto_total: montoFinal,
-            fecha_emision: form.fecha_emision,
-            fecha_vencimiento: form.fecha_vencimiento,
-            notas: form.notas.trim() || undefined,
-            imagen_url: imagenPreview ?? undefined,
-            items: tieneItems ? items : undefined,
-        };
+        setSaving(true);
+        try {
+            const data = {
+                numero: form.numero.trim() || numAuto,
+                tipo: 'Compra' as TipoFactura,
+                proveedor_cliente: form.proveedor_cliente.trim(),
+                descripcion: form.descripcion.trim(),
+                monto_total: totalConIva,
+                valor_neto: valorNeto,
+                descuento_global: descuentoGlobal,
+                fecha_emision: form.fecha_emision,
+                fecha_vencimiento: form.fecha_vencimiento,
+                notas: form.notas.trim() || undefined,
+                imagen_url: imagenPreview ?? undefined,
+                items: tieneItems ? items : undefined,
+                estado: editItem?.estado || EstadoFactura.PorPagar
+            };
 
-        if (editItem) {
-            editarFactura(editItem.id, data, userName);
-            addToast(`✅ Factura ${data.numero} actualizada`, 'success');
-        } else {
-            agregarFactura({ ...data, estado: EstadoFactura.PorPagar }, userName);
-            addToast(`✅ Factura ${data.numero} registrada`, 'success');
+            if (editItem) {
+                const ok = await editarFactura(editItem.id, data, userName);
+                if (!ok) { addToast('❌ Error al editar la factura. Verificá tu conexión.', 'error'); return; }
+                addToast(`✅ Factura ${data.numero} actualizada`, 'success');
+            } else {
+                const result = await agregarFactura(data, userName);
+                if (!result) { addToast('❌ Error al guardar la factura. Verificá tu conexión.', 'error'); return; }
+                addToast(`✅ Factura ${data.numero} registrada`, 'success');
+            }
+            onSave();
+            onClose();
+        } finally {
+            setSaving(false);
         }
-        onSave();
-        onClose();
     };
 
     return (
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="modal" style={{ width: 580 }}>
-                <div className="modal-title">🧾 {editItem ? 'Editar Factura' : 'Nueva Factura'}</div>
+            <div className="modal-content">
+                <div className="modal-header">
+                    <div className="modal-title">🧾 {editItem ? 'Editar Factura' : 'Nueva Factura'}</div>
+                    <button className="modal-close" onClick={onClose} aria-label="Cerrar">✕</button>
+                </div>
+                
                 <div className="modal-body">
                     <div className="form-group">
                         <div className="form-label">Número de Factura</div>
                         <input className="form-input" placeholder={numAuto} value={form.numero} onChange={set('numero')} />
                     </div>
+                    
                     <div className="form-group">
                         <div className="form-label">Proveedor / Cliente *</div>
                         <input 
@@ -1904,6 +2363,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                             }
                         </div>
                     </div>
+                    
                     <div className="form-group">
                         <div className="form-label">Descripción general (opcional)</div>
                         <input className="form-input" placeholder="Ej: Compra de alimentos mes de marzo" value={form.descripcion} onChange={set('descripcion')} />
@@ -1926,10 +2386,11 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                             onClick={() => {
                                                 const existe = db.productos.find((pr: Producto) => pr.nombre === p);
                                                 const newItem: ItemFactura = { 
-                                                    id: Date.now() + Math.random(), 
+                                                    id: crypto.randomUUID(), 
                                                     concepto: p, 
                                                     cantidad: 1, 
-                                                    precio_unitario: existe ? existe.precio_costo : 0 
+                                                    precio_unitario: existe ? existe.precio_costo : 0,
+                                                    descuento: undefined
                                                 };
                                                 setItems(prev => [...prev, newItem]);
                                             }}
@@ -1938,102 +2399,186 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                         </button>
                                     ))}
                         </div>
+                        
                         {items.length === 0 ? (
                             <div style={{ padding: '12px', background: 'var(--surface)', borderRadius: 8, border: '1px dashed var(--border)', textAlign: 'center', color: 'var(--muted)', fontSize: '0.85rem' }}>
                                 Sin ítems — podés ingresar el monto total manualmente abajo
                             </div>
                         ) : (
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                                <thead>
-                                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                        <th style={{ textAlign: 'left', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500 }}>Concepto *</th>
-                                        <th style={{ textAlign: 'center', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500, width: 100 }}>Cant.</th>
-                                        <th style={{ textAlign: 'right', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500, width: 110 }}>Precio Unit.</th>
-                                        <th style={{ textAlign: 'right', padding: '4px 4px', color: 'var(--muted)', fontWeight: 500, width: 100 }}>Subtotal</th>
-                                        <th style={{ width: 28 }}></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {items.map(it => (
-                                        <tr key={it.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                                            <td style={{ padding: '3px 4px' }}>
-                                                <input
-                                                    className="form-input"
-                                                    style={{ margin: 0, padding: '5px 4px', fontSize: '0.82rem' }}
-                                                    list="product-suggestions-list"
-                                                    value={it.concepto}
-                                                    onChange={e => {
-                                                        const val = e.target.value;
-                                                        updateItem(it.id, 'concepto', val);
-                                                        // Si coincide con un producto real, autocompletar el precio
-                                                        const p = db.productos.find((pr: Producto) => pr.nombre === val);
-                                                        if (p) updateItem(it.id, 'precio_unitario', p.precio_costo);
-                                                    }}
-                                                    placeholder="Ej: Alimento..."
-                                                />
-                                            </td>
-                                            <td style={{ padding: '3px 4px' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--surface)', borderRadius: 6, border: '1px solid var(--border)', padding: '2px' }}>
-                                                    <button 
-                                                        type="button" 
-                                                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '0 4px', fontSize: '1rem' }}
-                                                        onClick={() => updateItem(it.id, 'cantidad', Math.max(1, it.cantidad - 1))}
-                                                    >−</button>
+                            <div className="table-wrap" style={{ marginTop: 0 }}>
+                                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 650 }}>
+                                    <thead>
+                                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                            <th style={{ textAlign: 'left', padding: '8px 4px', color: 'var(--muted)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>Concepto *</th>
+                                            <th style={{ textAlign: 'center', padding: '8px 4px', color: 'var(--muted)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', width: 100 }}>Cant.</th>
+                                            <th style={{ textAlign: 'right', padding: '8px 4px', color: 'var(--muted)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', width: 110 }}>P. Unit.</th>
+                                            <th style={{ textAlign: 'right', padding: '8px 4px', color: 'var(--muted)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', width: 100 }}>Desc.</th>
+                                            <th style={{ textAlign: 'right', padding: '8px 4px', color: 'var(--muted)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', width: 110 }}>Subtotal</th>
+                                            <th style={{ width: 32 }}></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {items.map((it) => (
+                                            <tr key={it.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                <td style={{ padding: '6px 4px' }}>
                                                     <input
                                                         className="form-input"
-                                                        style={{ margin: 0, padding: '2px 0', border: 'none', fontSize: '0.82rem', textAlign: 'center', width: 40, background: 'transparent' }}
-                                                        type="number" min="1" step="1"
-                                                        value={it.cantidad}
-                                                        onChange={e => updateItem(it.id, 'cantidad', Math.floor(Number(e.target.value)) || 1)}
+                                                        style={{ margin: 0, padding: '5px 8px', fontSize: '0.82rem' }}
+                                                        placeholder="Concepto..."
+                                                        list="product-suggestions-list"
+                                                        value={it.concepto}
+                                                        onChange={e => {
+                                                            const val = e.target.value;
+                                                            updateItem(it.id, 'concepto', val);
+                                                            const p = db.productos.find((pr: Producto) => pr.nombre === val);
+                                                            if (p) updateItem(it.id, 'precio_unitario', p.precio_costo);
+                                                        }}
                                                     />
-                                                    <button 
-                                                        type="button" 
-                                                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '0 4px', fontSize: '1rem' }}
-                                                        onClick={() => updateItem(it.id, 'cantidad', it.cantidad + 1)}
-                                                    >＋</button>
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '3px 4px' }}>
+                                                </td>
+                                                <td style={{ padding: '6px 4px' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--surface)', borderRadius: 6, border: '1px solid var(--border)', padding: '2px' }}>
+                                                        <button 
+                                                            type="button" 
+                                                            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '0 6px', fontSize: '1rem' }}
+                                                            onClick={() => updateItem(it.id, 'cantidad', Math.max(1, it.cantidad - 1))}
+                                                        >－</button>
+                                                        <input
+                                                            className="form-input"
+                                                            style={{ margin: 0, padding: '2px 0', border: 'none', fontSize: '0.82rem', textAlign: 'center', width: 40, background: 'transparent' }}
+                                                            type="number" min="1" step="1"
+                                                            value={it.cantidad}
+                                                            onChange={e => updateItem(it.id, 'cantidad', Math.floor(Number(e.target.value)) || 1)}
+                                                        />
+                                                        <button 
+                                                            type="button" 
+                                                            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '0 6px', fontSize: '1rem' }}
+                                                            onClick={() => updateItem(it.id, 'cantidad', it.cantidad + 1)}
+                                                        >＋</button>
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '6px 4px' }}>
+                                                    <input
+                                                        className="form-input"
+                                                        style={{ margin: 0, padding: '5px 8px', fontSize: '0.82rem', textAlign: 'right' }}
+                                                        type="text"
+                                                        placeholder="0"
+                                                        value={formatCLP(it.precio_unitario)}
+                                                        onChange={e => updateItem(it.id, 'precio_unitario', parseCLP(e.target.value))}
+                                                    />
+                                                </td>
+                                                <td style={{ padding: '6px 4px' }}>
+                                                    <input
+                                                        className="form-input"
+                                                        style={{ margin: 0, padding: '5px 8px', fontSize: '0.82rem', textAlign: 'right' }}
+                                                        type="text"
+                                                        placeholder="0"
+                                                        value={formatCLP(it.descuento)}
+                                                        onChange={e => updateItem(it.id, 'descuento', e.target.value === '' ? undefined : parseCLP(e.target.value))}
+                                                    />
+                                                </td>
+                                                <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--accent)', fontSize: '0.88rem' }}>
+                                                    {fmtMoney((it.cantidad * it.precio_unitario) - (it.descuento || 0))}
+                                                </td>
+                                                <td style={{ padding: '6px 4px', textAlign: 'center' }}>
+                                                    <button type="button" onClick={() => removeItem(it.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                    <datalist id="product-suggestions-list">
+                                        {db.productos
+                                            .filter(p => p.nombre.toUpperCase() !== 'IVA')
+                                            .map((p: Producto) => (
+                                                <option key={p.id} value={p.nombre} />
+                                            ))}
+                                    </datalist>
+                                    <tfoot>
+                                        <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                            <td colSpan={4} style={{ padding: '10px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>Subtotal Neto</td>
+                                            <td style={{ padding: '10px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--fg)', fontSize: '0.95rem' }}>{fmtMoney(subtotalNeto)}</td>
+                                            <td></td>
+                                        </tr>
+                                        <tr>
+                                            <td colSpan={4} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>Descuento Total</td>
+                                            <td style={{ padding: '6px 4px', textAlign: 'right' }}>
                                                 <input
                                                     className="form-input"
-                                                    style={{ margin: 0, padding: '5px 4px', fontSize: '0.82rem', textAlign: 'right' }}
-                                                    type="number" min="0" step="0.01"
-                                                    value={it.precio_unitario}
-                                                    onChange={e => updateItem(it.id, 'precio_unitario', e.target.value)}
+                                                    style={{ margin: 0, padding: '4px 8px', fontSize: '0.82rem', textAlign: 'right', width: 110, display: 'inline-block' }}
+                                                    type="text"
+                                                    placeholder="0"
+                                                    value={formatCLP(form.descuento_global)}
+                                                    onChange={e => setForm(f => ({ ...f, descuento_global: parseCLP(e.target.value).toString() }))}
                                                 />
                                             </td>
-                                            <td style={{ padding: '3px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--accent)' }}>
-                                                {fmtMoney(it.cantidad * it.precio_unitario)}
-                                            </td>
-                                            <td style={{ padding: '3px 4px', textAlign: 'center' }}>
-                                                <button type="button" onClick={() => removeItem(it.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: '1rem', lineHeight: 1 }}>✕</button>
-                                            </td>
+                                            <td></td>
                                         </tr>
-                                    ))}
-                                </tbody>
-                                <datalist id="product-suggestions-list">
-                                    {db.productos.map((p: Producto) => (
-                                        <option key={p.id} value={p.nombre} />
-                                    ))}
-                                </datalist>
-                                <tfoot>
-                                    <tr style={{ borderTop: '2px solid var(--border)' }}>
-                                        <td colSpan={3} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.85rem' }}>TOTAL</td>
-                                        <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--accent)', fontSize: '1rem' }}>{fmtMoney(totalDesdeItems)}</td>
-                                        <td></td>
-                                    </tr>
-                                </tfoot>
-                            </table>
+                                        <tr style={{ borderTop: '1px solid var(--border)' }}>
+                                            <td colSpan={4} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>Valor Neto</td>
+                                            <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--fg)', fontSize: '0.95rem' }}>{fmtMoney(valorNeto)}</td>
+                                            <td></td>
+                                        </tr>
+                                        <tr>
+                                            <td colSpan={4} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>IVA (19%)</td>
+                                            <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--fg)', fontSize: '0.95rem' }}>{fmtMoney(iva)}</td>
+                                            <td></td>
+                                        </tr>
+                                        <tr style={{ borderTop: '2px solid var(--border)' }}>
+                                            <td colSpan={4} style={{ padding: '12px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.9rem', textTransform: 'uppercase' }}>Total con IVA</td>
+                                            <td style={{ padding: '12px 4px', textAlign: 'right', fontWeight: 800, color: 'var(--accent)', fontSize: '1.3rem' }}>{fmtMoney(totalConIva)}</td>
+                                            <td></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
                         )}
                     </div>
 
                     {/* Monto manual (solo si no hay ítems) */}
                     {!tieneItems && (
-                        <div className="form-group">
-                            <div className="form-label">Monto Total *</div>
-                            <input className="form-input" type="number" min="0" step="0.01" placeholder="0" value={form.monto_total} onChange={set('monto_total')} />
+                        <div className="form-group" style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '14px', border: '1px solid var(--border)' }}>
+                            <div className="form-label">Subtotal Neto *</div>
+                            <input 
+                                className="form-input" 
+                                type="text"
+                                placeholder="0" 
+                                value={formatCLP(form.monto_total)} 
+                                onChange={e => setForm(f => ({ ...f, monto_total: parseCLP(e.target.value).toString() }))} 
+                            />
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '16px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                                    <span style={{ color: 'var(--muted)' }}>Subtotal:</span>
+                                    <span style={{ fontWeight: 600 }}>{fmtMoney(subtotalNeto)}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                                    <span style={{ color: 'var(--muted)' }}>Descuento Total:</span>
+                                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        <input
+                                            className="form-input"
+                                            style={{ margin: 0, padding: '2px 8px', fontSize: '0.82rem', textAlign: 'right', width: 100 }}
+                                            type="text"
+                                            placeholder="0"
+                                            value={formatCLP(form.descuento_global)}
+                                            onChange={e => setForm(f => ({ ...f, descuento_global: parseCLP(e.target.value).toString() }))}
+                                        />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', borderTop: '1px dashed var(--border)', paddingTop: '8px', marginTop: '4px' }}>
+                                    <span style={{ color: 'var(--muted)' }}>Valor Neto:</span>
+                                    <span style={{ fontWeight: 600 }}>{fmtMoney(valorNeto)}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                                    <span style={{ color: 'var(--muted)' }}>IVA (19%):</span>
+                                    <span style={{ fontWeight: 600 }}>{fmtMoney(iva)}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', borderTop: '1px solid var(--border)', paddingTop: '10px', marginTop: '6px' }}>
+                                    <span style={{ fontWeight: 600, color: 'var(--accent)' }}>Total con IVA:</span>
+                                    <span style={{ fontWeight: 800, color: 'var(--accent)' }}>{fmtMoney(totalConIva)}</span>
+                                </div>
+                            </div>
                         </div>
                     )}
+                    
                     <div className="form-row">
                         <div className="form-group">
                             <div className="form-label">Fecha Emisión *</div>
@@ -2044,6 +2589,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                             <input className="form-input" type="date" value={form.fecha_vencimiento} onChange={set('fecha_vencimiento')} />
                         </div>
                     </div>
+                    
                     <div className="form-group">
                         <div className="form-label">Notas (opcional)</div>
                         <textarea className="form-input" rows={2} placeholder="Observaciones..." value={form.notas} onChange={set('notas')} />
@@ -2060,6 +2606,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                 <>
                                     <img src={imagenPreview} alt="Vista previa" className="img-preview" />
                                     <button
+                                        type="button"
                                         className="img-remove-btn"
                                         onClick={(e) => { e.stopPropagation(); setImagenPreview(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
                                     >✕ Quitar</button>
@@ -2082,9 +2629,12 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                         />
                     </div>
                 </div>
+
                 <div className="modal-actions">
-                    <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-                    <button className="btn-primary" onClick={save}>✅ Guardar Factura</button>
+                    <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>Cancelar</button>
+                    <button type="button" className="btn-primary" onClick={save} disabled={saving}>
+                        {saving ? '⏳ Guardando...' : '✅ Guardar Factura'}
+                    </button>
                 </div>
             </div>
         </div>
@@ -2096,7 +2646,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
 // ═══════════════════════════════════════════════════════
 
 interface POItem {
-    id: number;
+    id: string;
     nombre: string;
     emoji: string;
     qty: number;
@@ -2140,7 +2690,7 @@ function PurchaseOrderScreen({ addToast }: {
         addToast(`✅ ${p.nombre} agregado a la orden`, 'success');
     };
 
-    const handleQtyChange = (id: number, delta: number) => {
+    const handleQtyChange = (id: string, delta: number) => {
         setItems(prev => prev.map(i => {
             if (i.id === id) {
                 const newQty = Math.max(1, i.qty + delta);
@@ -2150,7 +2700,7 @@ function PurchaseOrderScreen({ addToast }: {
         }));
     };
 
-    const handleRemove = (id: number) => {
+    const handleRemove = (id: string) => {
         setItems(prev => prev.filter(i => i.id !== id));
     };
 
@@ -2427,7 +2977,7 @@ function PedidoModal({ carrito, total, onClose, addToast, onSuccess }: {
         }
     };
 
-    const handleCrearPedido = () => {
+    const handleCrearPedido = async () => {
         if (!telefono.trim() || !nombre.trim() || !direccion.trim()) {
             addToast('⚠️ Teléfono, nombre y dirección son obligatorios', 'error');
             return;
@@ -2436,19 +2986,23 @@ function PedidoModal({ carrito, total, onClose, addToast, onSuccess }: {
         let clienteId = clienteEncontrado?.id;
         if (!clienteId) {
             // crear nuevo cliente
-            const nuevoObj = crearCliente({
+            const nuevoObj = await crearCliente({
                 telefono: telefono.trim(),
                 nombre: nombre.trim(),
                 direccion: direccion.trim(),
                 notas: ''
             });
+            if (!nuevoObj) {
+                addToast('❌ Error al crear el cliente', 'error');
+                return;
+            }
             clienteId = nuevoObj.id;
         } else {
             // actualizar dirección por si cambió
-            editarCliente(clienteId, { nombre: nombre.trim(), direccion: direccion.trim() });
+            await editarCliente(clienteId, { nombre: nombre.trim(), direccion: direccion.trim() });
         }
 
-        crearPedido({
+        await crearPedido({
             id_cliente: clienteId,
             items: carrito,
             total,
@@ -2518,7 +3072,7 @@ function EditarPedidoModal({ pedido, cliente, onClose, onGuardar }: {
     pedido: Pedido;
     cliente: Cliente | undefined;
     onClose: () => void;
-    onGuardar: (idPedido: number, dataPedido: { nota_delivery?: string; metodo_pago?: MetodoPago }, idCliente?: number, nuevaDireccion?: string) => void;
+    onGuardar: (idPedido: string, dataPedido: { nota_delivery?: string; metodo_pago?: MetodoPago }, idCliente?: string, nuevaDireccion?: string) => void;
 }) {
     const [nota, setNota] = useState(pedido.nota_delivery || '');
     const [metodo, setMetodo] = useState<MetodoPago>(pedido.metodo_pago || MetodoPago.Efectivo);
@@ -2594,21 +3148,21 @@ function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => vo
         setPedidos(getPedidos());
     }, [refresh]);
 
-    const handleActualizarEstado = (id: number, nuevoEstado: EstadoPedido) => {
-        if (actualizarEstadoPedido(id, nuevoEstado)) {
-            addToast(`Pedido #${id} actualizado a ${nuevoEstado}`, 'success');
+    const handleActualizarEstado = async (id: string, nuevoEstado: EstadoPedido) => {
+        if (await actualizarEstadoPedido(id, nuevoEstado)) {
+            addToast(`Pedido #${id.slice(0, 8)} actualizado a ${nuevoEstado}`, 'success');
             setRefresh(r => r + 1);
         } else {
-            addToast(`Error al actualizar pedido #${id}`, 'error');
+            addToast(`Error al actualizar pedido #${id.slice(0, 8)}`, 'error');
         }
     };
 
-    const handleGuardarEdicion = (idPedido: number, dataPedido: { nota_delivery?: string; metodo_pago?: MetodoPago }, idCliente?: number, nuevaDireccion?: string) => {
-        editarPedido(idPedido, dataPedido);
+    const handleGuardarEdicion = async (idPedido: string, dataPedido: { nota_delivery?: string; metodo_pago?: MetodoPago }, idCliente?: string, nuevaDireccion?: string) => {
+        await editarPedido(idPedido, dataPedido);
         if (idCliente && nuevaDireccion !== undefined) {
-            editarCliente(idCliente, { direccion: nuevaDireccion });
+            await editarCliente(idCliente, { direccion: nuevaDireccion });
         }
-        addToast(`✅ Pedido #${idPedido} actualizado`, 'success');
+        addToast(`✅ Pedido #${idPedido.slice(0, 8)} actualizado`, 'success');
         setEditandoPedido(null);
         setRefresh(r => r + 1);
     };
@@ -2808,7 +3362,7 @@ function PedidosScreen({ addToast }: { addToast: (m: string, t: ToastType) => vo
 function EditarClienteModal({ cliente, onClose, onGuardar }: {
     cliente: Cliente;
     onClose: () => void;
-    onGuardar: (id: number, data: { nombre: string; telefono: string; direccion: string; notas: string }) => void;
+    onGuardar: (id: string, data: { nombre: string; telefono: string; direccion: string; notas: string }) => void;
 }) {
     const [nombre, setNombre] = useState(cliente.nombre);
     const [telefono, setTelefono] = useState(cliente.telefono);
@@ -2874,8 +3428,8 @@ function ClientesScreen({ addToast }: { addToast: (m: string, t: ToastType) => v
     const totalRegistrados = clientes.length;
     const clientesFrecuentes = clientes.filter(c => c.total_compras > 0).length;
 
-    const handleGuardar = (id: number, data: { nombre: string; telefono: string; direccion: string; notas: string }) => {
-        editarCliente(id, data);
+    const handleGuardar = async (id: string, data: { nombre: string; telefono: string; direccion: string; notas: string }) => {
+        await editarCliente(id, data);
         addToast('✅ Cliente actualizado', 'success');
         setEditando(null);
         setRefresh(r => r + 1);
