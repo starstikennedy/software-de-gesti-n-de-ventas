@@ -2473,25 +2473,22 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         onChange={e => {
                                                             const raw = e.target.value;
                                                             
-                                                            // Formateo visual
-                                                            let clean = raw.replace(/[^0-9.,]/g, '');
-                                                            let parts = clean.split(',');
-                                                            if (parts.length > 2) clean = parts[0] + ',' + parts.slice(1).join('');
-                                                            parts = clean.split(',');
-                                                            let intPart = parts[0];
-                                                            if (intPart) {
-                                                                const soloNumeros = intPart.replace(/\./g, '');
-                                                                intPart = soloNumeros.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-                                                            }
-                                                            const formatted = parts.length > 1 ? intPart + ',' + parts[1] : intPart;
+                                                            // Permitir solo dígitos y máximo una coma
+                                                            const sinFormato = raw.replace(/\./g, '').replace(/[^0-9,]/g, '');
+                                                            const partes = sinFormato.split(',');
+                                                            if (partes.length > 2) return; // más de una coma, ignorar
+                                                            
+                                                            // Formatear parte entera con puntos de miles
+                                                            let entera = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                                                            const formatted = partes.length === 2 ? entera + ',' + partes[1] : entera;
                                                             
                                                             updateItem(it.id, '_precioStr' as any, formatted);
                                                             
-                                                            // Guard explicit
-                                                            if (raw.endsWith(',')) return;
+                                                            // No calcular si termina en coma (usuario escribiendo decimales)
+                                                            if (sinFormato.endsWith(',')) return;
                                                             
-                                                            // Logica de calculo exacta
-                                                            const numero = parseFloat(raw.replace(/\./g, '').replace(',', '.'));
+                                                            // Parsear para cálculos
+                                                            const numero = parseFloat(sinFormato.replace(',', '.'));
                                                             const valor = isNaN(numero) ? 0 : numero;
                                                             updateItem(it.id, 'precio_unitario', valor);
                                                         }}
@@ -2508,25 +2505,22 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         onChange={e => {
                                                             const raw = e.target.value;
                                                             
-                                                            // Formateo visual
-                                                            let clean = raw.replace(/[^0-9.,]/g, '');
-                                                            let parts = clean.split(',');
-                                                            if (parts.length > 2) clean = parts[0] + ',' + parts.slice(1).join('');
-                                                            parts = clean.split(',');
-                                                            let intPart = parts[0];
-                                                            if (intPart) {
-                                                                const soloNumeros = intPart.replace(/\./g, '');
-                                                                intPart = soloNumeros.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-                                                            }
-                                                            const formatted = parts.length > 1 ? intPart + ',' + parts[1] : intPart;
+                                                            // Permitir solo dígitos y máximo una coma
+                                                            const sinFormato = raw.replace(/\./g, '').replace(/[^0-9,]/g, '');
+                                                            const partes = sinFormato.split(',');
+                                                            if (partes.length > 2) return; // más de una coma, ignorar
+                                                            
+                                                            // Formatear parte entera con puntos de miles
+                                                            let entera = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                                                            const formatted = partes.length === 2 ? entera + ',' + partes[1] : entera;
                                                             
                                                             updateItem(it.id, '_descStr' as any, formatted);
                                                             
-                                                            // Guard explicit
-                                                            if (raw.endsWith(',')) return;
+                                                            // No calcular si termina en coma (usuario escribiendo decimales)
+                                                            if (sinFormato.endsWith(',')) return;
                                                             
-                                                            // Logica de calculo exacta
-                                                            const numero = parseFloat(raw.replace(/\./g, '').replace(',', '.'));
+                                                            // Parsear para cálculos
+                                                            const numero = parseFloat(sinFormato.replace(',', '.'));
                                                             const valor = isNaN(numero) ? 0 : numero;
                                                             updateItem(it.id, 'descuento', formatted === '' ? undefined : valor);
                                                         }}
