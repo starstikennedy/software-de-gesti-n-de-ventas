@@ -562,6 +562,41 @@ export function parseDecimalCLP(s: string): number {
     return isNaN(num) ? 0 : num;
 }
 
+/** 
+ * Formateador en tiempo real para CLP con decimales (coma).
+ * Ejem: "33025,21" -> "33.025,21"
+ */
+export function formatTypingCLP(s: string | undefined | null): string {
+    if (s === undefined || s === null || s === '') return '';
+    
+    // 1. Quitar todos los puntos previos (miles) para no duplicar
+    let clean = String(s).replace(/\./g, '');
+    
+    // 2. Quedarnos solo con números y una coma
+    clean = clean.replace(/[^0-9,]/g, '');
+
+    // Si hay más de una coma, nos quedamos solo con la primera
+    const parts = clean.split(',');
+    if (parts.length > 2) {
+        clean = parts[0] + ',' + parts.slice(1).join('');
+    }
+
+    const finalParts = clean.split(',');
+    let integerPart = finalParts[0];
+    let decimalPart = finalParts.length > 1 ? finalParts[1] : null;
+
+    // 3. Formatear parte entera con puntos cada 3 dígitos
+    if (integerPart) {
+        integerPart = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    }
+
+    // 4. Reensamblar con la coma si existía
+    if (decimalPart !== null) {
+        return integerPart + ',' + decimalPart;
+    }
+    return integerPart;
+}
+
 export function fmtMoney(n: number): string {
     return new Intl.NumberFormat('es-CL', {
         style: 'currency',

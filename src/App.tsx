@@ -6,7 +6,7 @@ import {
     crearCliente, editarCliente, crearPedido, getPedidos, editarPedido, actualizarEstadoPedido, getClientes,
     MetodoPago, EstadoFactura, EstadoPedido, type Producto, type ItemCarrito, type Factura, type TipoFactura, type ItemFactura, type Cliente, type Pedido,
     reactivarFactura, syncFromCloud, getClienteByPhone, eliminarFactura, wakeUpSupabase, formatCLP, parseCLP,
-    formatDecimalCLP, parseDecimalCLP
+    formatDecimalCLP, parseDecimalCLP, formatTypingCLP
 } from './pos';
 import { supabase } from './supabaseClient';
 
@@ -2465,10 +2465,9 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         placeholder="0"
                                                         value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : formatDecimalCLP(it.precio_unitario)}
                                                         onChange={e => {
-                                                            let val = e.target.value.replace(/[^0-9.,]/g, '');
-                                                            if ((val.match(/,/g) || []).length > 1) return;
-                                                            updateItem(it.id, '_precioStr' as any, val);
-                                                            updateItem(it.id, 'precio_unitario', parseDecimalCLP(val));
+                                                            const formatted = formatTypingCLP(e.target.value);
+                                                            updateItem(it.id, '_precioStr' as any, formatted);
+                                                            updateItem(it.id, 'precio_unitario', parseDecimalCLP(formatted));
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_precioStr' as any, undefined)}
                                                     />
@@ -2481,10 +2480,9 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         placeholder="0"
                                                         value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento !== undefined ? formatDecimalCLP(it.descuento) : '')}
                                                         onChange={e => {
-                                                            let val = e.target.value.replace(/[^0-9.,]/g, '');
-                                                            if ((val.match(/,/g) || []).length > 1) return;
-                                                            updateItem(it.id, '_descStr' as any, val);
-                                                            updateItem(it.id, 'descuento', val === '' ? undefined : parseDecimalCLP(val));
+                                                            const formatted = formatTypingCLP(e.target.value);
+                                                            updateItem(it.id, '_descStr' as any, formatted);
+                                                            updateItem(it.id, 'descuento', formatted === '' ? undefined : parseDecimalCLP(formatted));
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_descStr' as any, undefined)}
                                                     />
