@@ -761,9 +761,14 @@ function GranelModal({ producto, initialQty, onClose, onSubmit }: {
     const [kilosStr, setKilosStr] = useState(defaultKilos);
     const [montoStr, setMontoStr] = useState(defaultMonto);
 
+    const parseLocalFloat = (val: string) => {
+        const clean = val.replace(',', '.');
+        return parseFloat(clean);
+    };
+
     const handleKilosChange = (val: string) => {
         setKilosStr(val);
-        const k = parseFloat(val);
+        const k = parseLocalFloat(val);
         if (!isNaN(k)) {
             setMontoStr(Math.round(k * producto.precio_venta).toString());
         } else {
@@ -773,7 +778,7 @@ function GranelModal({ producto, initialQty, onClose, onSubmit }: {
 
     const handleMontoChange = (val: string) => {
         setMontoStr(val);
-        const m = parseFloat(val);
+        const m = parseLocalFloat(val);
         if (!isNaN(m)) {
             const k = m / producto.precio_venta;
             setKilosStr(k.toFixed(3)); // Mostrar hasta 3 decimales
@@ -783,7 +788,7 @@ function GranelModal({ producto, initialQty, onClose, onSubmit }: {
     };
 
     const submit = () => {
-        const k = parseFloat(kilosStr);
+        const k = parseLocalFloat(kilosStr);
         if (!isNaN(k) && k > 0) {
             onSubmit(producto, k);
         }
@@ -804,7 +809,8 @@ function GranelModal({ producto, initialQty, onClose, onSubmit }: {
                             <div className="form-label">Monto ($)</div>
                             <input
                                 className="form-input"
-                                type="number"
+                                type="text"
+                                inputMode="decimal"
                                 placeholder="Ej: 2000"
                                 value={montoStr}
                                 onChange={(e) => handleMontoChange(e.target.value)}
@@ -818,9 +824,9 @@ function GranelModal({ producto, initialQty, onClose, onSubmit }: {
                             <div className="form-label">Peso (Kilos)</div>
                             <input
                                 className="form-input"
-                                type="number"
-                                placeholder="Ej: 0.66"
-                                step="0.001"
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="Ej: 0,66"
                                 value={kilosStr}
                                 onChange={(e) => handleKilosChange(e.target.value)}
                             />
@@ -829,7 +835,7 @@ function GranelModal({ producto, initialQty, onClose, onSubmit }: {
                 </div>
                 <div className="modal-actions">
                     <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-                    <button className="btn-primary" onClick={submit} disabled={!parseFloat(kilosStr)}>✅ Agregar al carrito</button>
+                    <button className="btn-primary" onClick={submit} disabled={!parseLocalFloat(kilosStr)}>✅ Agregar al carrito</button>
                 </div>
             </div>
         </div>
@@ -2262,8 +2268,8 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
     const tieneItems = items.length > 0;
     const subtotalNeto = Math.round(tieneItems 
         ? items.reduce((s, it) => s + Math.round((it.cantidad * it.precio_unitario) - (it.descuento || 0)), 0)
-        : (parseFloat(form.monto_total) || 0));
-    const descuentoGlobal = Math.round(parseFloat(form.descuento_global) || 0);
+        : (parseDecimalCLP(form.monto_total) || 0));
+    const descuentoGlobal = Math.round(parseDecimalCLP(form.descuento_global) || 0);
     const valorNeto = subtotalNeto - descuentoGlobal;
     const iva = Math.round(valorNeto * 0.19);
     const totalConIva = valorNeto + iva;
@@ -2585,9 +2591,10 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                             <input 
                                 className="form-input" 
                                 type="text"
+                                inputMode="decimal"
                                 placeholder="0" 
-                                value={formatDecimalCLP(form.monto_total)} 
-                                onChange={e => setForm(f => ({ ...f, monto_total: parseDecimalCLP(e.target.value).toString() }))} 
+                                value={form.monto_total} 
+                                onChange={e => setForm(f => ({ ...f, monto_total: formatTypingCLP(e.target.value) }))} 
                             />
                             
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '16px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
@@ -2602,9 +2609,10 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                             className="form-input"
                                             style={{ margin: 0, padding: '2px 8px', fontSize: '0.82rem', textAlign: 'right', width: 100 }}
                                             type="text"
+                                            inputMode="decimal"
                                             placeholder="0"
-                                            value={formatDecimalCLP(form.descuento_global)}
-                                            onChange={e => setForm(f => ({ ...f, descuento_global: parseDecimalCLP(e.target.value).toString() }))}
+                                            value={form.descuento_global}
+                                            onChange={e => setForm(f => ({ ...f, descuento_global: formatTypingCLP(e.target.value) }))}
                                         />
                                     </div>
                                 </div>
