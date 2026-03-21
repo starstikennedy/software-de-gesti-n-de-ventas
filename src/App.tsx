@@ -2465,8 +2465,10 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         placeholder="0"
                                                         value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : formatDecimalCLP(it.precio_unitario)}
                                                         onChange={e => {
-                                                            const formatted = formatTypingCLP(e.target.value);
+                                                            const raw = e.target.value;
+                                                            const formatted = formatTypingCLP(raw);
                                                             updateItem(it.id, '_precioStr' as any, formatted);
+                                                            if (raw.endsWith(',')) return; // esperar decimales
                                                             updateItem(it.id, 'precio_unitario', parseDecimalCLP(formatted));
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_precioStr' as any, undefined)}
@@ -2480,8 +2482,10 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         placeholder="0"
                                                         value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento !== undefined ? formatDecimalCLP(it.descuento) : '')}
                                                         onChange={e => {
-                                                            const formatted = formatTypingCLP(e.target.value);
+                                                            const raw = e.target.value;
+                                                            const formatted = formatTypingCLP(raw);
                                                             updateItem(it.id, '_descStr' as any, formatted);
+                                                            if (raw.endsWith(',')) return; // esperar decimales
                                                             updateItem(it.id, 'descuento', formatted === '' ? undefined : parseDecimalCLP(formatted));
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_descStr' as any, undefined)}
@@ -2518,7 +2522,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                     type="text"
                                                     placeholder="0"
                                                     value={formatCLP(form.descuento_global)}
-                                                    onChange={e => setForm(f => ({ ...f, descuento_global: parseCLP(e.target.value).toString() }))}
+                                                    onChange={e => setForm(f => ({ ...f, descuento_global: parseDecimalCLP(e.target.value).toString() }))}
                                                 />
                                             </td>
                                             <td></td>
@@ -2552,8 +2556,8 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                 className="form-input" 
                                 type="text"
                                 placeholder="0" 
-                                value={formatCLP(form.monto_total)} 
-                                onChange={e => setForm(f => ({ ...f, monto_total: parseCLP(e.target.value).toString() }))} 
+                                value={formatDecimalCLP(form.monto_total)} 
+                                onChange={e => setForm(f => ({ ...f, monto_total: parseDecimalCLP(e.target.value).toString() }))} 
                             />
                             
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '16px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
@@ -2569,8 +2573,8 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                             style={{ margin: 0, padding: '2px 8px', fontSize: '0.82rem', textAlign: 'right', width: 100 }}
                                             type="text"
                                             placeholder="0"
-                                            value={formatCLP(form.descuento_global)}
-                                            onChange={e => setForm(f => ({ ...f, descuento_global: parseCLP(e.target.value).toString() }))}
+                                            value={formatDecimalCLP(form.descuento_global)}
+                                            onChange={e => setForm(f => ({ ...f, descuento_global: parseDecimalCLP(e.target.value).toString() }))}
                                         />
                                     </div>
                                 </div>
