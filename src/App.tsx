@@ -2474,12 +2474,15 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                             const raw = e.target.value;
                                                             
                                                             // Formateo visual
-                                                            let clean = raw.replace(/[^0-9,]/g, '');
+                                                            let clean = raw.replace(/[^0-9.,]/g, '');
                                                             let parts = clean.split(',');
                                                             if (parts.length > 2) clean = parts[0] + ',' + parts.slice(1).join('');
                                                             parts = clean.split(',');
                                                             let intPart = parts[0];
-                                                            if (intPart) intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                                                            if (intPart) {
+                                                                const soloNumeros = intPart.replace(/\./g, '');
+                                                                intPart = soloNumeros.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                                                            }
                                                             const formatted = parts.length > 1 ? intPart + ',' + parts[1] : intPart;
                                                             
                                                             updateItem(it.id, '_precioStr' as any, formatted);
@@ -2506,12 +2509,15 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                             const raw = e.target.value;
                                                             
                                                             // Formateo visual
-                                                            let clean = raw.replace(/[^0-9,]/g, '');
+                                                            let clean = raw.replace(/[^0-9.,]/g, '');
                                                             let parts = clean.split(',');
                                                             if (parts.length > 2) clean = parts[0] + ',' + parts.slice(1).join('');
                                                             parts = clean.split(',');
                                                             let intPart = parts[0];
-                                                            if (intPart) intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                                                            if (intPart) {
+                                                                const soloNumeros = intPart.replace(/\./g, '');
+                                                                intPart = soloNumeros.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                                                            }
                                                             const formatted = parts.length > 1 ? intPart + ',' + parts[1] : intPart;
                                                             
                                                             updateItem(it.id, '_descStr' as any, formatted);
