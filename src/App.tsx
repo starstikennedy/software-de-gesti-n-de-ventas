@@ -2470,30 +2470,14 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         type="text"
                                                         inputMode="numeric"
                                                         placeholder="0"
-                                                        value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : formatDecimalCLP(it.precio_unitario)}
+                                                        value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : (it.precio_unitario === 0 ? '' : String(it.precio_unitario).replace('.', ','))}
                                                         onChange={e => {
-                                                            let val = e.target.value;
-                                                            // Solo permitir dígitos y coma
-                                                            val = val.replace(/[^0-9,]/g, '');
-                                                            // Máximo una coma
-                                                            const comaCount = (val.match(/,/g) || []).length;
-                                                            if (comaCount > 1) return;
-                                                            // Separar parte entera y decimal
-                                                            const [entera, decimal] = val.split(',');
-                                                            // Formatear entera con puntos de miles
-                                                            const enteraFormateada = entera.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-                                                            // Reconstruir
-                                                            const display = decimal !== undefined 
-                                                                ? enteraFormateada + ',' + decimal 
-                                                                : enteraFormateada;
-                                                            updateItem(it.id, '_precioStr' as any, display);
-                                                            // No calcular si termina en coma
-                                                            if (val.endsWith(',')) return;
-                                                            // Calcular valor numérico
+                                                            const val = e.target.value.replace(/[^0-9,]/g, '');
+                                                            if ((val.match(/,/g) || []).length > 1) return;
                                                             const numero = parseFloat(val.replace(',', '.'));
                                                             updateItem(it.id, 'precio_unitario', isNaN(numero) ? 0 : numero);
+                                                            updateItem(it.id, '_precioStr' as any, val);
                                                         }}
-                                                        onBlur={() => updateItem(it.id, '_precioStr' as any, undefined)}
                                                     />
                                                 </td>
                                                 <td style={{ padding: '6px 4px' }}>
@@ -2503,30 +2487,14 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         type="text"
                                                         inputMode="numeric"
                                                         placeholder="0"
-                                                        value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento !== undefined ? formatDecimalCLP(it.descuento) : '')}
+                                                        value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento ? String(it.descuento).replace('.', ',') : '')}
                                                         onChange={e => {
-                                                            let val = e.target.value;
-                                                            // Solo permitir dígitos y coma
-                                                            val = val.replace(/[^0-9,]/g, '');
-                                                            // Máximo una coma
-                                                            const comaCount = (val.match(/,/g) || []).length;
-                                                            if (comaCount > 1) return;
-                                                            // Separar parte entera y decimal
-                                                            const [entera, decimal] = val.split(',');
-                                                            // Formatear entera con puntos de miles
-                                                            const enteraFormateada = entera.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-                                                            // Reconstruir
-                                                            const display = decimal !== undefined 
-                                                                ? enteraFormateada + ',' + decimal 
-                                                                : enteraFormateada;
-                                                            updateItem(it.id, '_descStr' as any, display);
-                                                            // No calcular si termina en coma
-                                                            if (val.endsWith(',')) return;
-                                                            // Calcular valor numérico
+                                                            const val = e.target.value.replace(/[^0-9,]/g, '');
+                                                            if ((val.match(/,/g) || []).length > 1) return;
                                                             const numero = parseFloat(val.replace(',', '.'));
-                                                            updateItem(it.id, 'descuento', isNaN(numero) || display === '' ? undefined : numero);
+                                                            updateItem(it.id, 'descuento', val === '' || isNaN(numero) ? undefined : numero);
+                                                            updateItem(it.id, '_descStr' as any, val);
                                                         }}
-                                                        onBlur={() => updateItem(it.id, '_descStr' as any, undefined)}
                                                     />
                                                 </td>
                                                 <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--accent)', fontSize: '0.88rem' }}>
