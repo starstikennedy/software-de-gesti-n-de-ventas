@@ -2466,10 +2466,25 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : formatDecimalCLP(it.precio_unitario)}
                                                         onChange={e => {
                                                             const raw = e.target.value;
-                                                            const formatted = formatTypingCLP(raw);
+                                                            
+                                                            // Formateo visual
+                                                            let clean = raw.replace(/[^0-9,]/g, '');
+                                                            let parts = clean.split(',');
+                                                            if (parts.length > 2) clean = parts[0] + ',' + parts.slice(1).join('');
+                                                            parts = clean.split(',');
+                                                            let intPart = parts[0];
+                                                            if (intPart) intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                                                            const formatted = parts.length > 1 ? intPart + ',' + parts[1] : intPart;
+                                                            
                                                             updateItem(it.id, '_precioStr' as any, formatted);
-                                                            if (raw.endsWith(',')) return; // esperar decimales
-                                                            updateItem(it.id, 'precio_unitario', parseDecimalCLP(formatted));
+                                                            
+                                                            // Guard explicit
+                                                            if (raw.endsWith(',')) return;
+                                                            
+                                                            // Logica de calculo exacta
+                                                            const numero = parseFloat(raw.replace(/\./g, '').replace(',', '.'));
+                                                            const valor = isNaN(numero) ? 0 : numero;
+                                                            updateItem(it.id, 'precio_unitario', valor);
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_precioStr' as any, undefined)}
                                                     />
@@ -2483,10 +2498,25 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento !== undefined ? formatDecimalCLP(it.descuento) : '')}
                                                         onChange={e => {
                                                             const raw = e.target.value;
-                                                            const formatted = formatTypingCLP(raw);
+                                                            
+                                                            // Formateo visual
+                                                            let clean = raw.replace(/[^0-9,]/g, '');
+                                                            let parts = clean.split(',');
+                                                            if (parts.length > 2) clean = parts[0] + ',' + parts.slice(1).join('');
+                                                            parts = clean.split(',');
+                                                            let intPart = parts[0];
+                                                            if (intPart) intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                                                            const formatted = parts.length > 1 ? intPart + ',' + parts[1] : intPart;
+                                                            
                                                             updateItem(it.id, '_descStr' as any, formatted);
-                                                            if (raw.endsWith(',')) return; // esperar decimales
-                                                            updateItem(it.id, 'descuento', formatted === '' ? undefined : parseDecimalCLP(formatted));
+                                                            
+                                                            // Guard explicit
+                                                            if (raw.endsWith(',')) return;
+                                                            
+                                                            // Logica de calculo exacta
+                                                            const numero = parseFloat(raw.replace(/\./g, '').replace(',', '.'));
+                                                            const valor = isNaN(numero) ? 0 : numero;
+                                                            updateItem(it.id, 'descuento', formatted === '' ? undefined : valor);
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_descStr' as any, undefined)}
                                                     />
