@@ -2468,29 +2468,30 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         className="form-input"
                                                         style={{ margin: 0, padding: '5px 8px', fontSize: '0.82rem', textAlign: 'right' }}
                                                         type="text"
+                                                        inputMode="numeric"
                                                         placeholder="0"
                                                         value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : formatDecimalCLP(it.precio_unitario)}
                                                         onChange={e => {
-                                                            const raw = e.target.value;
-                                                            
-                                                            // Permitir solo dígitos y máximo una coma
-                                                            const sinFormato = raw.replace(/\./g, '').replace(/[^0-9,]/g, '');
-                                                            const partes = sinFormato.split(',');
-                                                            if (partes.length > 2) return; // más de una coma, ignorar
-                                                            
-                                                            // Formatear parte entera con puntos de miles
-                                                            let entera = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-                                                            const formatted = partes.length === 2 ? entera + ',' + partes[1] : entera;
-                                                            
-                                                            updateItem(it.id, '_precioStr' as any, formatted);
-                                                            
-                                                            // No calcular si termina en coma (usuario escribiendo decimales)
-                                                            if (sinFormato.endsWith(',')) return;
-                                                            
-                                                            // Parsear para cálculos
-                                                            const numero = parseFloat(sinFormato.replace(',', '.'));
-                                                            const valor = isNaN(numero) ? 0 : numero;
-                                                            updateItem(it.id, 'precio_unitario', valor);
+                                                            let val = e.target.value;
+                                                            // Solo permitir dígitos y coma
+                                                            val = val.replace(/[^0-9,]/g, '');
+                                                            // Máximo una coma
+                                                            const comaCount = (val.match(/,/g) || []).length;
+                                                            if (comaCount > 1) return;
+                                                            // Separar parte entera y decimal
+                                                            const [entera, decimal] = val.split(',');
+                                                            // Formatear entera con puntos de miles
+                                                            const enteraFormateada = entera.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                                                            // Reconstruir
+                                                            const display = decimal !== undefined 
+                                                                ? enteraFormateada + ',' + decimal 
+                                                                : enteraFormateada;
+                                                            updateItem(it.id, '_precioStr' as any, display);
+                                                            // No calcular si termina en coma
+                                                            if (val.endsWith(',')) return;
+                                                            // Calcular valor numérico
+                                                            const numero = parseFloat(val.replace(',', '.'));
+                                                            updateItem(it.id, 'precio_unitario', isNaN(numero) ? 0 : numero);
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_precioStr' as any, undefined)}
                                                     />
@@ -2500,29 +2501,30 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         className="form-input"
                                                         style={{ margin: 0, padding: '5px 8px', fontSize: '0.82rem', textAlign: 'right' }}
                                                         type="text"
+                                                        inputMode="numeric"
                                                         placeholder="0"
                                                         value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento !== undefined ? formatDecimalCLP(it.descuento) : '')}
                                                         onChange={e => {
-                                                            const raw = e.target.value;
-                                                            
-                                                            // Permitir solo dígitos y máximo una coma
-                                                            const sinFormato = raw.replace(/\./g, '').replace(/[^0-9,]/g, '');
-                                                            const partes = sinFormato.split(',');
-                                                            if (partes.length > 2) return; // más de una coma, ignorar
-                                                            
-                                                            // Formatear parte entera con puntos de miles
-                                                            let entera = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-                                                            const formatted = partes.length === 2 ? entera + ',' + partes[1] : entera;
-                                                            
-                                                            updateItem(it.id, '_descStr' as any, formatted);
-                                                            
-                                                            // No calcular si termina en coma (usuario escribiendo decimales)
-                                                            if (sinFormato.endsWith(',')) return;
-                                                            
-                                                            // Parsear para cálculos
-                                                            const numero = parseFloat(sinFormato.replace(',', '.'));
-                                                            const valor = isNaN(numero) ? 0 : numero;
-                                                            updateItem(it.id, 'descuento', formatted === '' ? undefined : valor);
+                                                            let val = e.target.value;
+                                                            // Solo permitir dígitos y coma
+                                                            val = val.replace(/[^0-9,]/g, '');
+                                                            // Máximo una coma
+                                                            const comaCount = (val.match(/,/g) || []).length;
+                                                            if (comaCount > 1) return;
+                                                            // Separar parte entera y decimal
+                                                            const [entera, decimal] = val.split(',');
+                                                            // Formatear entera con puntos de miles
+                                                            const enteraFormateada = entera.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                                                            // Reconstruir
+                                                            const display = decimal !== undefined 
+                                                                ? enteraFormateada + ',' + decimal 
+                                                                : enteraFormateada;
+                                                            updateItem(it.id, '_descStr' as any, display);
+                                                            // No calcular si termina en coma
+                                                            if (val.endsWith(',')) return;
+                                                            // Calcular valor numérico
+                                                            const numero = parseFloat(val.replace(',', '.'));
+                                                            updateItem(it.id, 'descuento', isNaN(numero) || display === '' ? undefined : numero);
                                                         }}
                                                         onBlur={() => updateItem(it.id, '_descStr' as any, undefined)}
                                                     />
