@@ -2425,7 +2425,11 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {items.map((it) => (
+                                        {items.map((it) => {
+                                            const precioDisplay = (it as any)._precioStr ?? (it.precio_unitario === 0 ? '' : String(it.precio_unitario).replace('.', ','));
+                                            const descDisplay = (it as any)._descStr ?? (it.descuento === undefined || it.descuento === null ? '' : String(it.descuento).replace('.', ','));
+                                            
+                                            return (
                                             <tr key={it.id} style={{ borderBottom: '1px solid var(--border)' }}>
                                                 <td style={{ padding: '6px 4px' }}>
                                                     <input
@@ -2470,13 +2474,14 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         type="text"
                                                         inputMode="numeric"
                                                         placeholder="0"
-                                                        value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : (it.precio_unitario === 0 ? '' : String(it.precio_unitario).replace('.', ','))}
+                                                        value={precioDisplay}
                                                         onChange={e => {
                                                             const val = e.target.value.replace(/[^0-9,]/g, '');
                                                             if ((val.match(/,/g) || []).length > 1) return;
+                                                            updateItem(it.id, '_precioStr' as any, val);
+                                                            if (val.endsWith(',')) return;
                                                             const numero = parseFloat(val.replace(',', '.'));
                                                             updateItem(it.id, 'precio_unitario', isNaN(numero) ? 0 : numero);
-                                                            updateItem(it.id, '_precioStr' as any, val);
                                                         }}
                                                     />
                                                 </td>
@@ -2487,13 +2492,14 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         type="text"
                                                         inputMode="numeric"
                                                         placeholder="0"
-                                                        value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento ? String(it.descuento).replace('.', ',') : '')}
+                                                        value={descDisplay}
                                                         onChange={e => {
                                                             const val = e.target.value.replace(/[^0-9,]/g, '');
                                                             if ((val.match(/,/g) || []).length > 1) return;
+                                                            updateItem(it.id, '_descStr' as any, val);
+                                                            if (val.endsWith(',')) return;
                                                             const numero = parseFloat(val.replace(',', '.'));
                                                             updateItem(it.id, 'descuento', val === '' || isNaN(numero) ? undefined : numero);
-                                                            updateItem(it.id, '_descStr' as any, val);
                                                         }}
                                                     />
                                                 </td>
@@ -2504,7 +2510,8 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                     <button type="button" onClick={() => removeItem(it.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
                                                 </td>
                                             </tr>
-                                        ))}
+                                            );
+                                        })}
                                     </tbody>
                                     <datalist id="product-suggestions-list">
                                         {db.productos
