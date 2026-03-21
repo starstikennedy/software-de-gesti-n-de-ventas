@@ -2277,7 +2277,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
     const addItem = () => setItems(prev => [...prev, { id: crypto.randomUUID(), concepto: '', cantidad: 1, precio_unitario: 0, descuento: undefined }]);
     const removeItem = (id: string) => setItems(prev => prev.filter(it => it.id !== id));
     const updateItem = (id: string, field: keyof ItemFactura, value: string | number | undefined) =>
-        setItems(prev => prev.map(it => it.id === id ? { ...it, [field]: (typeof value === 'string' && field !== 'id' && field !== 'concepto') ? Number(value) : value } : it));
+        setItems(prev => prev.map(it => it.id === id ? { ...it, [field]: (typeof value === 'string' && !['id', 'concepto', '_precioStr', '_descStr'].includes(field as string)) ? Number(value) : value } : it));
 
     const [saving, setSaving] = useState(false);
 
