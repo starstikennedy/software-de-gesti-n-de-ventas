@@ -5,7 +5,8 @@ import {
     agregarFactura, actualizarEstadoFactura, getFacturas, editarFactura, pagarFactura, cancelarPago,
     crearCliente, editarCliente, crearPedido, getPedidos, editarPedido, actualizarEstadoPedido, getClientes,
     MetodoPago, EstadoFactura, EstadoPedido, type Producto, type ItemCarrito, type Factura, type TipoFactura, type ItemFactura, type Cliente, type Pedido,
-    reactivarFactura, syncFromCloud, getClienteByPhone, eliminarFactura, wakeUpSupabase, formatCLP, parseCLP
+    reactivarFactura, syncFromCloud, getClienteByPhone, eliminarFactura, wakeUpSupabase, formatCLP, parseCLP,
+    formatDecimalCLP, parseDecimalCLP
 } from './pos';
 import { supabase } from './supabaseClient';
 
@@ -2259,10 +2260,10 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
 
     // Total calculado desde ítems (o manual si no hay ítems)
     const tieneItems = items.length > 0;
-    const subtotalNeto = tieneItems 
-        ? items.reduce((s, it) => s + (it.cantidad * it.precio_unitario) - (it.descuento || 0), 0)
-        : (parseFloat(form.monto_total) || 0);
-    const descuentoGlobal = parseFloat(form.descuento_global) || 0;
+    const subtotalNeto = Math.round(tieneItems 
+        ? items.reduce((s, it) => s + Math.round((it.cantidad * it.precio_unitario) - (it.descuento || 0)), 0)
+        : (parseFloat(form.monto_total) || 0));
+    const descuentoGlobal = Math.round(parseFloat(form.descuento_global) || 0);
     const valorNeto = subtotalNeto - descuentoGlobal;
     const iva = Math.round(valorNeto * 0.19);
     const totalConIva = valorNeto + iva;
@@ -2462,8 +2463,14 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         style={{ margin: 0, padding: '5px 8px', fontSize: '0.82rem', textAlign: 'right' }}
                                                         type="text"
                                                         placeholder="0"
-                                                        value={formatCLP(it.precio_unitario)}
-                                                        onChange={e => updateItem(it.id, 'precio_unitario', parseCLP(e.target.value))}
+                                                        value={(it as any)._precioStr !== undefined ? (it as any)._precioStr : formatDecimalCLP(it.precio_unitario)}
+                                                        onChange={e => {
+                                                            let val = e.target.value.replace(/[^0-9.,]/g, '');
+                                                            if ((val.match(/,/g) || []).length > 1) return;
+                                                            updateItem(it.id, '_precioStr' as any, val);
+                                                            updateItem(it.id, 'precio_unitario', parseDecimalCLP(val));
+                                                        }}
+                                                        onBlur={() => updateItem(it.id, '_precioStr' as any, undefined)}
                                                     />
                                                 </td>
                                                 <td style={{ padding: '6px 4px' }}>
@@ -2472,12 +2479,18 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                                         style={{ margin: 0, padding: '5px 8px', fontSize: '0.82rem', textAlign: 'right' }}
                                                         type="text"
                                                         placeholder="0"
-                                                        value={formatCLP(it.descuento)}
-                                                        onChange={e => updateItem(it.id, 'descuento', e.target.value === '' ? undefined : parseCLP(e.target.value))}
+                                                        value={(it as any)._descStr !== undefined ? (it as any)._descStr : (it.descuento !== undefined ? formatDecimalCLP(it.descuento) : '')}
+                                                        onChange={e => {
+                                                            let val = e.target.value.replace(/[^0-9.,]/g, '');
+                                                            if ((val.match(/,/g) || []).length > 1) return;
+                                                            updateItem(it.id, '_descStr' as any, val);
+                                                            updateItem(it.id, 'descuento', val === '' ? undefined : parseDecimalCLP(val));
+                                                        }}
+                                                        onBlur={() => updateItem(it.id, '_descStr' as any, undefined)}
                                                     />
                                                 </td>
                                                 <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--accent)', fontSize: '0.88rem' }}>
-                                                    {fmtMoney((it.cantidad * it.precio_unitario) - (it.descuento || 0))}
+                                                    {fmtMoney(Math.round((it.cantidad * it.precio_unitario) - (it.descuento || 0)))}
                                                 </td>
                                                 <td style={{ padding: '6px 4px', textAlign: 'center' }}>
                                                     <button type="button" onClick={() => removeItem(it.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>

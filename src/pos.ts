@@ -543,6 +543,21 @@ export const getHistorialProducto = (id: string): MovimientoStock[] =>
     db.movimientos_stock.filter((m) => m.id_producto === id);
 
 // ── 11. UTILIDAD DE FORMATO ──────────────────────────────────
+export function formatDecimalCLP(n: number | string | undefined | null): string {
+    if (n === undefined || n === null || n === '') return '';
+    const val = typeof n === 'number' ? n : parseFloat(n.toString().replace(/\./g, '').replace(',', '.'));
+    if (isNaN(val)) return '';
+    return new Intl.NumberFormat('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 4 }).format(val);
+}
+
+export function parseDecimalCLP(s: string): number {
+    if (!s) return 0;
+    let clean = s.replace(/\./g, '');
+    clean = clean.replace(',', '.');
+    clean = clean.replace(/[^\d.]/g, '');
+    return parseFloat(clean) || 0;
+}
+
 export function fmtMoney(n: number): string {
     return new Intl.NumberFormat('es-CL', {
         style: 'currency',
