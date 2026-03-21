@@ -552,10 +552,14 @@ export function formatDecimalCLP(n: number | string | undefined | null): string 
 
 export function parseDecimalCLP(s: string): number {
     if (!s) return 0;
-    let clean = s.replace(/\./g, '');
+    // 1. Eliminar todos los puntos de miles
+    let clean = String(s).replace(/\./g, '');
+    // 2. Reemplazar la coma decimal por punto
     clean = clean.replace(',', '.');
-    clean = clean.replace(/[^\d.]/g, '');
-    return parseFloat(clean) || 0;
+    // 3. Convertir a número con parseFloat
+    const num = parseFloat(clean);
+    // 4. Si el valor limpio no es un número válido, tratar como 0 para que nunca aparezca NaN en pantalla
+    return isNaN(num) ? 0 : num;
 }
 
 export function fmtMoney(n: number): string {
