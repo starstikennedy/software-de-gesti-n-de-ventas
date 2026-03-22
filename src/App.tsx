@@ -2204,6 +2204,35 @@ function PagoModal({ factura, onClose, onConfirm }: {
     );
 }
 
+function AmountInput({ value, onChange, className, style, placeholder }: { value: number, onChange: (n: number) => void, className?: string, style?: React.CSSProperties, placeholder?: string }) {
+    const [str, setStr] = useState(value === 0 ? '' : String(value).replace('.', ','));
+    
+    React.useEffect(() => {
+        const currentNum = parseFloat(str.replace(',', '.'));
+        if (!isNaN(currentNum) && currentNum === value) return; // Keep current string if equal to avoid jumping
+        setStr(value === 0 ? '' : String(value).replace('.', ','));
+    }, [value]);
+
+    return (
+        <input
+            className={className || "form-input"}
+            style={style || { margin: 0, padding: '5px 8px', fontSize: '0.82rem', textAlign: 'right', width: '100%' }}
+            type="text"
+            inputMode="numeric"
+            placeholder={placeholder || "0"}
+            value={str}
+            onChange={e => {
+                const val = e.target.value.replace(/[^0-9,]/g, '');
+                if ((val.match(/,/g) || []).length > 1) return;
+                setStr(val);
+                if (val.endsWith(',')) return;
+                const numero = parseFloat(val.replace(',', '.'));
+                onChange(isNaN(numero) ? 0 : numero);
+            }}
+        />
+    );
+}
+
 // ── Modal Factura (Nueva / Editar) ───────────────────────
 function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
     editItem?: Factura;
@@ -2264,15 +2293,14 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
         reader.readAsDataURL(file);
     };
 
-    // Total calculado desde ítems (o manual si no hay ítems)
     const tieneItems = items.length > 0;
-    const subtotalNeto = Math.round(tieneItems 
-        ? items.reduce((s, it) => s + Math.round((it.cantidad * it.precio_unitario) - (it.descuento || 0)), 0)
-        : (parseDecimalCLP(form.monto_total) || 0));
-    const descuentoGlobal = Math.round(parseDecimalCLP(form.descuento_global) || 0);
-    const valorNeto = subtotalNeto - descuentoGlobal;
-    const iva = Math.round(valorNeto * 0.19);
-    const totalConIva = valorNeto + iva;
+    
+    // Totales Manuales
+    const [subtotal, setSubtotal] = useState(editItem ? (editItem.valor_neto || 0) + (editItem.descuento_global || 0) : 0);
+    const [descuento, setDescuento] = useState(editItem?.descuento_global || 0);
+    const [valorNeto, setValorNeto] = useState(editItem?.valor_neto || 0);
+    const [ivaManual, setIvaManual] = useState(editItem ? editItem.monto_total - (editItem.valor_neto || 0) : 0);
+    const [totalFinal, setTotalFinal] = useState(editItem?.monto_total || 0);
 
     const addItem = () => setItems(prev => [...prev, { id: crypto.randomUUID(), concepto: '', cantidad: 1, precio_unitario: 0, descuento: undefined }]);
     const removeItem = (id: string) => setItems(prev => prev.filter(it => it.id !== id));
@@ -2284,7 +2312,7 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
     const save = async () => {
         if (!form.proveedor_cliente.trim()) { addToast('⚠️ Ingresar proveedor/cliente', 'error'); return; }
         
-        if (!tieneItems && subtotalNeto <= 0) { addToast('⚠️ Agregá ítems o ingresá un monto', 'error'); return; }
+        if (!tieneItems && totalFinal <= 0) { addToast('⚠️ Agregá ítems o ingresá un monto', 'error'); return; }
         if (!form.fecha_vencimiento) { addToast('⚠️ Ingresar fecha de vencimiento', 'error'); return; }
         if (tieneItems && items.some(it => !it.concepto.trim())) { addToast('⚠️ Todos los ítems deben tener un concepto', 'error'); return; }
 
@@ -2295,9 +2323,9 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                 tipo: 'Compra' as TipoFactura,
                 proveedor_cliente: form.proveedor_cliente.trim(),
                 descripcion: form.descripcion.trim(),
-                monto_total: totalConIva,
+                monto_total: totalFinal,
                 valor_neto: valorNeto,
-                descuento_global: descuentoGlobal,
+                descuento_global: descuento,
                 fecha_emision: form.fecha_emision,
                 fecha_vencimiento: form.fecha_vencimiento,
                 notas: form.notas.trim() || undefined,
@@ -2523,36 +2551,37 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                                     <tfoot>
                                         <tr style={{ borderTop: '2px solid var(--border)' }}>
                                             <td colSpan={4} style={{ padding: '10px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>Subtotal Neto</td>
-                                            <td style={{ padding: '10px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--fg)', fontSize: '0.95rem' }}>{fmtMoney(subtotalNeto)}</td>
+                                            <td style={{ padding: '6px 4px', textAlign: 'right' }}>
+                                                <AmountInput value={subtotal} onChange={setSubtotal} />
+                                            </td>
                                             <td></td>
                                         </tr>
                                         <tr>
                                             <td colSpan={4} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>Descuento Total</td>
                                             <td style={{ padding: '6px 4px', textAlign: 'right' }}>
-                                                <input
-                                                    className="form-input"
-                                                    style={{ margin: 0, padding: '4px 8px', fontSize: '0.82rem', textAlign: 'right', width: 110, display: 'inline-block' }}
-                                                    type="text"
-                                                    placeholder="0"
-                                                    value={formatCLP(form.descuento_global)}
-                                                    onChange={e => setForm(f => ({ ...f, descuento_global: parseDecimalCLP(e.target.value).toString() }))}
-                                                />
+                                                <AmountInput value={descuento} onChange={setDescuento} />
                                             </td>
                                             <td></td>
                                         </tr>
                                         <tr style={{ borderTop: '1px solid var(--border)' }}>
                                             <td colSpan={4} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>Valor Neto</td>
-                                            <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--fg)', fontSize: '0.95rem' }}>{fmtMoney(valorNeto)}</td>
+                                            <td style={{ padding: '6px 4px', textAlign: 'right' }}>
+                                                <AmountInput value={valorNeto} onChange={setValorNeto} />
+                                            </td>
                                             <td></td>
                                         </tr>
                                         <tr>
                                             <td colSpan={4} style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.82rem', textTransform: 'uppercase' }}>IVA (19%)</td>
-                                            <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700, color: 'var(--fg)', fontSize: '0.95rem' }}>{fmtMoney(iva)}</td>
+                                            <td style={{ padding: '6px 4px', textAlign: 'right' }}>
+                                                <AmountInput value={ivaManual} onChange={setIvaManual} />
+                                            </td>
                                             <td></td>
                                         </tr>
-                                        <tr style={{ borderTop: '2px solid var(--border)' }}>
-                                            <td colSpan={4} style={{ padding: '12px 4px', textAlign: 'right', fontWeight: 600, color: 'var(--muted)', fontSize: '0.9rem', textTransform: 'uppercase' }}>Total con IVA</td>
-                                            <td style={{ padding: '12px 4px', textAlign: 'right', fontWeight: 800, color: 'var(--accent)', fontSize: '1.3rem' }}>{fmtMoney(totalConIva)}</td>
+                                        <tr style={{ borderTop: '2px solid var(--border)', background: 'rgba(99,102,241,0.05)' }}>
+                                            <td colSpan={4} style={{ padding: '12px 4px', textAlign: 'right', fontWeight: 800, color: 'var(--accent)', fontSize: '0.9rem', textTransform: 'uppercase' }}>Total con IVA</td>
+                                            <td style={{ padding: '12px 4px', textAlign: 'right' }}>
+                                                <AmountInput value={totalFinal} onChange={setTotalFinal} style={{ margin: 0, padding: '5px 8px', fontSize: '1.1rem', textAlign: 'right', fontWeight: 800, color: 'var(--accent)' }} />
+                                            </td>
                                             <td></td>
                                         </tr>
                                     </tfoot>
@@ -2564,46 +2593,28 @@ function FacturaModal({ editItem, onClose, addToast, onSave, userName }: {
                     {/* Monto manual (solo si no hay ítems) */}
                     {!tieneItems && (
                         <div className="form-group" style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '14px', border: '1px solid var(--border)' }}>
-                            <div className="form-label">Subtotal Neto *</div>
-                            <input 
-                                className="form-input" 
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0" 
-                                value={form.monto_total} 
-                                onChange={e => setForm(f => ({ ...f, monto_total: formatTypingCLP(e.target.value) }))} 
-                            />
+                            <div className="form-label" style={{ marginBottom: 16 }}>Totales Manuales</div>
                             
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '16px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
-                                    <span style={{ color: 'var(--muted)' }}>Subtotal:</span>
-                                    <span style={{ fontWeight: 600 }}>{fmtMoney(subtotalNeto)}</span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem' }}>
+                                    <span style={{ color: 'var(--muted)' }}>Subtotal Neto:</span>
+                                    <AmountInput value={subtotal} onChange={setSubtotal} style={{ margin: 0, padding: '5px 8px', fontSize: '0.9rem', textAlign: 'right', width: 150 }} />
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem' }}>
                                     <span style={{ color: 'var(--muted)' }}>Descuento Total:</span>
-                                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                                        <input
-                                            className="form-input"
-                                            style={{ margin: 0, padding: '2px 8px', fontSize: '0.82rem', textAlign: 'right', width: 100 }}
-                                            type="text"
-                                            inputMode="decimal"
-                                            placeholder="0"
-                                            value={form.descuento_global}
-                                            onChange={e => setForm(f => ({ ...f, descuento_global: formatTypingCLP(e.target.value) }))}
-                                        />
-                                    </div>
+                                    <AmountInput value={descuento} onChange={setDescuento} style={{ margin: 0, padding: '5px 8px', fontSize: '0.9rem', textAlign: 'right', width: 150 }} />
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', borderTop: '1px dashed var(--border)', paddingTop: '8px', marginTop: '4px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', borderTop: '1px dashed var(--border)', paddingTop: '8px', marginTop: '4px' }}>
                                     <span style={{ color: 'var(--muted)' }}>Valor Neto:</span>
-                                    <span style={{ fontWeight: 600 }}>{fmtMoney(valorNeto)}</span>
+                                    <AmountInput value={valorNeto} onChange={setValorNeto} style={{ margin: 0, padding: '5px 8px', fontSize: '0.9rem', textAlign: 'right', width: 150 }} />
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem' }}>
                                     <span style={{ color: 'var(--muted)' }}>IVA (19%):</span>
-                                    <span style={{ fontWeight: 600 }}>{fmtMoney(iva)}</span>
+                                    <AmountInput value={ivaManual} onChange={setIvaManual} style={{ margin: 0, padding: '5px 8px', fontSize: '0.9rem', textAlign: 'right', width: 150 }} />
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', borderTop: '1px solid var(--border)', paddingTop: '10px', marginTop: '6px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '1.1rem', borderTop: '1px solid var(--border)', paddingTop: '10px', marginTop: '6px' }}>
                                     <span style={{ fontWeight: 600, color: 'var(--accent)' }}>Total con IVA:</span>
-                                    <span style={{ fontWeight: 800, color: 'var(--accent)' }}>{fmtMoney(totalConIva)}</span>
+                                    <AmountInput value={totalFinal} onChange={setTotalFinal} style={{ margin: 0, padding: '5px 8px', fontSize: '1.2rem', textAlign: 'right', fontWeight: 800, color: 'var(--accent)', width: 150 }} />
                                 </div>
                             </div>
                         </div>
